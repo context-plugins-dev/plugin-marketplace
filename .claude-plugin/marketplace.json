@@ -5,5 +5,11 @@
     "name": "APIMatic",
     "email": "developer@apimatic.io"
   },
-  "plugins": []
+  "plugins": [
+    {
+      "name": "e2e-language-select-api-sdk",
+      "source": "./plugins/e2e-language-select-api-sdk",
+      "description": "Integrate and consume the APIMatic-generated E2E Language Select API SDK across TypeScript, Python, Go — bundled language skills grounded in the cloned SDK source."
+    }
+  ]
 }
