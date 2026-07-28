@@ -220,6 +220,11 @@
       "name": "sqlmanagementclient-sdk",
       "source": "./plugins/sqlmanagementclient-sdk",
       "description": "Integrate and consume the APIMatic-generated SqlManagementClient SDK across C#/.NET, TypeScript, PHP, Python, Ruby, Go — bundled language skills grounded in the cloned SDK source."
+    },
+    {
+      "name": "hubspot-e2e-sdk",
+      "source": "./plugins/hubspot-e2e-sdk",
+      "description": "Integrate and consume the APIMatic-generated HubSpot E2E SDK across C#/.NET, TypeScript, Java, PHP, Python, Ruby, Go — bundled language skills grounded in the cloned SDK source."
     }
   ]
 }
