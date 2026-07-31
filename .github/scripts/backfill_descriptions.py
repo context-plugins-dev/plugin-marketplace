@@ -31,7 +31,7 @@ import urllib.request
 SENTINEL_PREFIX = "TODO_AUTO_DESCRIPTION: "
 
 MAX_DESCRIPTION_LENGTH = 200
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

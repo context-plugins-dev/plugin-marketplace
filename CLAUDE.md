@@ -67,7 +67,7 @@ deterministic on purpose and never calls an LLM itself.
 
 `.github/workflows/backfill-descriptions.yml` (scheduled hourly + `workflow_dispatch`) fills these
 in: it scans every plugin's canonical `.claude-plugin/plugin.json` for that sentinel, asks Gemini
-(`gemini-2.5-flash-lite` by default; override with the `GEMINI_MODEL` env var) for a one-line
+(`gemini-3.5-flash-lite` by default; override with the `GEMINI_MODEL` env var) for a one-line
 generic description of the named API, validates the response (non-empty, single line, ≤200 chars,
 doesn't itself contain the sentinel), and writes the identical line to all five locations. A plugin
 whose canonical manifest no longer starts with the sentinel — backfilled, or hand-edited — is
