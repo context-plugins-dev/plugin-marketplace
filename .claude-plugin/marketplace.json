@@ -15,6 +15,11 @@
       "name": "storsimplemanagementclient-sdk",
       "source": "./plugins/storsimplemanagementclient-sdk",
       "description": "TODO_AUTO_DESCRIPTION: StorSimpleManagementClient API"
+    },
+    {
+      "name": "coingecko-demo-api",
+      "source": "./plugins/coingecko-demo-api",
+      "description": "TODO_AUTO_DESCRIPTION: CoinGecko Demo API API"
     }
   ]
 }
