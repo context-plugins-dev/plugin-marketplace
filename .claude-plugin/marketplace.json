@@ -14,12 +14,12 @@
     {
       "name": "storsimplemanagementclient-sdk",
       "source": "./plugins/storsimplemanagementclient-sdk",
-      "description": "TODO_AUTO_DESCRIPTION: StorSimpleManagementClient API"
+      "description": "The StorSimpleManagementClient API enables developers to programmatically manage and administer StorSimple storage devices, volume containers, and backup policies within their cloud infrastructure."
     },
     {
       "name": "coingecko-demo-api",
       "source": "./plugins/coingecko-demo-api",
-      "description": "TODO_AUTO_DESCRIPTION: CoinGecko Demo API API"
+      "description": "The CoinGecko Demo API provides free programmatic access to cryptocurrency market data including prices, volume, and exchange rates for development and testing purposes."
     }
   ]
 }

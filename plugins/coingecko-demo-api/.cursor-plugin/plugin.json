@@ -2,7 +2,7 @@
   "name": "coingecko-demo-api",
   "displayName": "CoinGecko Demo API SDK",
   "version": "0.1.0",
-  "description": "TODO_AUTO_DESCRIPTION: CoinGecko Demo API API",
+  "description": "The CoinGecko Demo API provides free programmatic access to cryptocurrency market data including prices, volume, and exchange rates for development and testing purposes.",
   "author": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"

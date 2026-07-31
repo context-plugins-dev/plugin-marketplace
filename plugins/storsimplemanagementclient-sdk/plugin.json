@@ -2,7 +2,7 @@
   "name": "storsimplemanagementclient-sdk",
   "displayName": "StorSimpleManagementClient SDK",
   "version": "0.1.0",
-  "description": "TODO_AUTO_DESCRIPTION: StorSimpleManagementClient API",
+  "description": "The StorSimpleManagementClient API enables developers to programmatically manage and administer StorSimple storage devices, volume containers, and backup policies within their cloud infrastructure.",
   "author": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"
