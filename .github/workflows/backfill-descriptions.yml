@@ -1,13 +1,19 @@
 name: Backfill plugin descriptions
 
-# Scheduled + manual only, deliberately — the crawler's ingest stage commits straight to `main`
-# (see contextmatic-crawler's ARCHITECTURE.md, stage 6), so chaining this off `push` would race
-# an in-flight ingest commit. A schedule naturally batches whatever placeholders landed since the
-# last run into one Gemini-backed pass instead of firing per-commit.
+# Push + daily schedule + manual. The push trigger is scoped to plugins/** so it only fires when
+# the crawler's ingest stage (see contextmatic-crawler's ARCHITECTURE.md, stage 6) actually lands a
+# new plugin — not on unrelated commits like workflow or doc changes. Racing an in-flight ingest
+# commit is fine: the commit/push step below already fetches, rebases, and retries on a rejected
+# push, and the concurrency group serializes overlapping runs of this workflow itself. The daily
+# schedule is just a backstop in case a push-triggered run is ever missed.
 on:
   workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/**'
   schedule:
-    - cron: '0 * * * *' # hourly; adjust to taste
+    - cron: '0 0 * * *' # daily at midnight UTC; adjust to taste
 
 permissions:
   contents: write

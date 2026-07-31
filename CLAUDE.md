@@ -65,7 +65,8 @@ three `plugin.json` manifests under `plugins/{name}/` and both `plugins` entries
 `.claude-plugin/marketplace.json` / `.cursor-plugin/marketplace.json`. That crawler stays
 deterministic on purpose and never calls an LLM itself.
 
-`.github/workflows/backfill-descriptions.yml` (scheduled hourly + `workflow_dispatch`) fills these
+`.github/workflows/backfill-descriptions.yml` (runs on push to `plugins/**`, daily at midnight UTC,
+and `workflow_dispatch`) fills these
 in: it scans every plugin's canonical `.claude-plugin/plugin.json` for that sentinel, asks Gemini
 (`gemini-3.5-flash-lite` by default; override with the `GEMINI_MODEL` env var) for a one-line
 generic description of the named API, validates the response (non-empty, single line, ≤200 chars,
