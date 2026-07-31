@@ -89,16 +89,25 @@ def find_pending_plugins():
 
 def call_gemini(api_name, api_key):
     prompt = (
-        f'Write ONE short, generic sentence describing what the "{api_name}" API/service does — '
-        "what it's for, in plain factual terms. No marketing language, no quotation marks around "
-        "the output, no newlines. Output only the sentence, nothing else."
+        f'Write ONE short description of the "{api_name}" API/service, matching the style of these '
+        "examples:\n"
+        '- "Upload, manage, and stream video content on Vimeo."\n'
+        '- "Cloud accounting software for invoicing, payroll, expenses, and bookkeeping."\n'
+        '- "Read and write pages, databases, and blocks in Notion workspaces."\n\n'
+        'Open with an active verb (e.g. "Manage", "Send", "Track", "Book") or a short noun phrase '
+        f'naming the category (e.g. "Cloud accounting software for..."). Do not start with "The '
+        f'{api_name} API" or similar, and do not use words like "enables", "allows", or "provides". '
+        "No marketing language, no quotation marks around the output, no newlines. Output only the "
+        "sentence, nothing else."
     )
     body = json.dumps(
         {
             "systemInstruction": {
                 "parts": [
                     {
-                        "text": "You write single-sentence, factual API descriptions for a developer tool marketplace."
+                        "text": "You write short, punchy one-line descriptions for a developer tool "
+                        "marketplace, leading with an active verb or a concise noun phrase naming the "
+                        "category rather than a dry '<Name> API' preamble."
                     }
                 ]
             },
