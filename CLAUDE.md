@@ -57,6 +57,26 @@ plan/debug agent orchestration but replaces the MCP server with a **skills + SDK
 
 Self-contained — bundles its own copies of the Maxio SDK skills, so it has no dependency on any other plugin (do not install a separate skills-only Maxio plugin alongside it, or skill names would collide).
 
+## Description backfill
+
+Plugins land here from the `contextmatic-crawler` pipeline's ingest stage with a placeholder
+description — `TODO_AUTO_DESCRIPTION: {API Name} API` — in all five places a description lives: the
+three `plugin.json` manifests under `plugins/{name}/` and both `plugins` entries in
+`.claude-plugin/marketplace.json` / `.cursor-plugin/marketplace.json`. That crawler stays
+deterministic on purpose and never calls an LLM itself.
+
+`.github/workflows/backfill-descriptions.yml` (scheduled hourly + `workflow_dispatch`) fills these
+in: it scans every plugin's canonical `.claude-plugin/plugin.json` for that sentinel, asks Gemini
+(`gemini-2.5-flash-lite` by default; override with the `GEMINI_MODEL` env var) for a one-line
+generic description of the named API, validates the response (non-empty, single line, ≤200 chars,
+doesn't itself contain the sentinel), and writes the identical line to all five locations. A plugin
+whose canonical manifest no longer starts with the sentinel — backfilled, or hand-edited — is
+skipped, so re-runs are free and a human edit is never overwritten. One bad Gemini response only
+skips that plugin; it never blocks the rest of the batch or half-writes a plugin's five files.
+
+Requires the `GEMINI_API_KEY` repo secret (Settings → Secrets and variables → Actions). The key is
+only ever read into the job's environment and used in the `x-goog-api-key` HTTP header — never logged.
+
 ## Per-IDE manifest convention
 
 MCP-backed plugins carry one manifest per IDE, and each manifest points at its own MCP config file so it can send an IDE-specific `X-Apimatic-Mcp-Client` telemetry header:
