@@ -2,7 +2,7 @@
   "name": "test",
   "displayName": "test SDK",
   "version": "0.1.0",
-  "description": "TODO_AUTO_DESCRIPTION: test API",
+  "description": "Send, manage, and inspect test data and mock HTTP requests.",
   "author": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"
