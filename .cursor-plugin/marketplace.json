@@ -25,6 +25,11 @@
       "name": "test",
       "source": "./plugins/test",
       "description": "Send, manage, and inspect test data and mock HTTP requests."
+    },
+    {
+      "name": "discourse-api-documentation",
+      "source": "./plugins/discourse-api-documentation",
+      "description": "TODO_AUTO_DESCRIPTION: Discourse API Documentation API"
     }
   ]
 }
