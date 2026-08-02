@@ -29,7 +29,7 @@
     {
       "name": "discourse-api-documentation",
       "source": "./plugins/discourse-api-documentation",
-      "description": "TODO_AUTO_DESCRIPTION: Discourse API Documentation API"
+      "description": "Retrieve and integrate Discourse forum documentation and developer guides."
     }
   ]
 }
