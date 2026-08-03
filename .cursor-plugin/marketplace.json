@@ -34,7 +34,7 @@
     {
       "name": "notiontest",
       "source": "./plugins/notiontest",
-      "description": "TODO_AUTO_DESCRIPTION: NotionTest API"
+      "description": "Automate, test, and validate Notion workspace integrations and API workflows."
     }
   ]
 }

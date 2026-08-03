@@ -2,7 +2,7 @@
   "name": "notiontest",
   "displayName": "NotionTest SDK",
   "version": "0.1.0",
-  "description": "TODO_AUTO_DESCRIPTION: NotionTest API",
+  "description": "Automate, test, and validate Notion workspace integrations and API workflows.",
   "author": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"
