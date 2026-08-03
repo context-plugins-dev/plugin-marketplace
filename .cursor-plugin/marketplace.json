@@ -30,6 +30,11 @@
       "name": "discourse-api-documentation",
       "source": "./plugins/discourse-api-documentation",
       "description": "Retrieve and integrate Discourse forum documentation and developer guides."
+    },
+    {
+      "name": "notiontest",
+      "source": "./plugins/notiontest",
+      "description": "TODO_AUTO_DESCRIPTION: NotionTest API"
     }
   ]
 }

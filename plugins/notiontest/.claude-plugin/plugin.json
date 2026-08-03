@@ -1,0 +1,32 @@
+{
+  "name": "notiontest",
+  "displayName": "NotionTest SDK",
+  "version": "0.1.0",
+  "description": "TODO_AUTO_DESCRIPTION: NotionTest API",
+  "author": {
+    "name": "APIMatic",
+    "email": "developer@apimatic.io"
+  },
+  "license": "MIT",
+  "homepage": "https://www.apimatic.io",
+  "repository": "https://github.com/context-plugins-dev/plugin-marketplace",
+  "keywords": [
+    "apimatic",
+    "sdk",
+    "api-integration",
+    "notiontest",
+    "dotnet",
+    "java",
+    "ruby",
+    "go"
+  ],
+  "skills": [
+    "./skills/dotnet",
+    "./skills/java",
+    "./skills/ruby",
+    "./skills/go"
+  ],
+  "agents": [
+    "./agents/dotnet-notiontest-sdk.md"
+  ]
+}
