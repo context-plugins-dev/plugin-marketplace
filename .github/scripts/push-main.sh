@@ -22,6 +22,13 @@
 set -uo pipefail
 
 if [ -n "${MARKETPLACE_PUSH_TOKEN:-}" ]; then
+  # actions/checkout (persist-credentials: true, the default) stores GITHUB_TOKEN as
+  #   http.https://github.com/.extraheader = AUTHORIZATION: basic <base64 x-access-token:...>
+  # That header is scoped to the whole host, so it is attached to a push to ANY github.com URL and
+  # takes precedence over a credential helper. Leave it in place and the push authenticates as
+  # GITHUB_TOKEN no matter what token the helper offers — which looks exactly like the secret being
+  # ignored, and gets rejected by the ruleset all the same. Drop it for this repo's config first.
+  git config --unset-all "http.https://github.com/.extraheader" 2>/dev/null || true
   exec git \
     -c credential.helper= \
     -c 'credential.helper=!f() { echo username=x-access-token; echo password=$MARKETPLACE_PUSH_TOKEN; }; f' \
