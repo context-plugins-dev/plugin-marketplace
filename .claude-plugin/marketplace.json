@@ -1,6 +1,6 @@
 {
   "name": "apimatic",
-  "description": "APIMatic plugin marketplace — SDK-native, version-aware API context for your AI coding agent.",
+  "description": "APIMatic plugin marketplace \u2014 SDK-native, version-aware API context for your AI coding agent.",
   "owner": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"
@@ -9,7 +9,7 @@
     {
       "name": "e2e-language-select-api-sdk",
       "source": "./plugins/e2e-language-select-api-sdk",
-      "description": "Integrate and consume the APIMatic-generated E2E Language Select API SDK across TypeScript, Python, Go — bundled language skills grounded in the cloned SDK source."
+      "description": "Integrate and consume the APIMatic-generated E2E Language Select API SDK across TypeScript, Python, Go \u2014 bundled language skills grounded in the cloned SDK source."
     },
     {
       "name": "storsimplemanagementclient-sdk",
@@ -35,6 +35,11 @@
       "name": "notiontest",
       "source": "./plugins/notiontest",
       "description": "Automate, test, and validate Notion workspace integrations and API workflows."
+    },
+    {
+      "name": "ghostplug",
+      "source": "./plugins/ghostplug",
+      "description": "Demo entry for case testing."
     }
   ]
 }
