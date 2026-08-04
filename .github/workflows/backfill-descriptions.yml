@@ -45,6 +45,8 @@ jobs:
         run: python3 .github/scripts/sync_marketplace.py
 
       - name: Commit and push the sync
+        env:
+          MARKETPLACE_PUSH_TOKEN: ${{ secrets.MARKETPLACE_PUSH_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -66,7 +68,7 @@ jobs:
             fi
             git add -- "${owned[@]}"
             git commit -m "Sync marketplace registries and docs with the plugin set"
-            if git push origin HEAD:main; then
+            if bash .github/scripts/push-main.sh; then
               echo "Pushed."
               exit 0
             fi
@@ -87,6 +89,8 @@ jobs:
         run: python3 .github/scripts/backfill_descriptions.py
 
       - name: Commit and push
+        env:
+          MARKETPLACE_PUSH_TOKEN: ${{ secrets.MARKETPLACE_PUSH_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -108,7 +112,7 @@ jobs:
           git commit -m "Backfill description for $names"
 
           for attempt in 1 2 3 4 5; do
-            if git push origin HEAD:main; then
+            if bash .github/scripts/push-main.sh; then
               echo "Pushed."
               exit 0
             fi
