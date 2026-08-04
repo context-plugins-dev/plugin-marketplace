@@ -35,6 +35,11 @@
       "name": "notiontest",
       "source": "./plugins/notiontest",
       "description": "Automate, test, and validate Notion workspace integrations and API workflows."
+    },
+    {
+      "name": "dev-ruleset-test-api",
+      "source": "./plugins/dev-ruleset-test-api",
+      "description": "TODO_AUTO_DESCRIPTION: Dev Ruleset Test API API"
     }
   ]
 }
