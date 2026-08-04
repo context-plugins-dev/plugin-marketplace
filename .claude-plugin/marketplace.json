@@ -40,6 +40,11 @@
       "name": "dev-ruleset-test-api",
       "source": "./plugins/dev-ruleset-test-api",
       "description": "Validate and enforce development compliance rules across your codebases and workflows."
+    },
+    {
+      "name": "verizon",
+      "source": "./plugins/verizon",
+      "description": "TODO_AUTO_DESCRIPTION: Verizon API"
     }
   ]
 }
