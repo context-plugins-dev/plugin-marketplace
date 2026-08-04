@@ -22,11 +22,6 @@
       "description": "The CoinGecko Demo API provides free programmatic access to cryptocurrency market data including prices, volume, and exchange rates for development and testing purposes."
     },
     {
-      "name": "test",
-      "source": "./plugins/test",
-      "description": "Send, manage, and inspect test data and mock HTTP requests."
-    },
-    {
       "name": "discourse-api-documentation",
       "source": "./plugins/discourse-api-documentation",
       "description": "Retrieve and integrate Discourse forum documentation and developer guides."
