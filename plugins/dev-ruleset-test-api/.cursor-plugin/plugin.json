@@ -2,7 +2,7 @@
   "name": "dev-ruleset-test-api",
   "displayName": "Dev Ruleset Test API SDK",
   "version": "0.1.0",
-  "description": "TODO_AUTO_DESCRIPTION: Dev Ruleset Test API API",
+  "description": "Validate and enforce development compliance rules across your codebases and workflows.",
   "author": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"

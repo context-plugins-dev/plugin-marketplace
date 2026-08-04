@@ -24,7 +24,7 @@
     {
       "name": "test",
       "source": "./plugins/test",
-      "description": "TODO_AUTO_DESCRIPTION: test API"
+      "description": "Run, schedule, and automate software tests across multiple environments."
     },
     {
       "name": "discourse-api-documentation",
@@ -39,7 +39,7 @@
     {
       "name": "dev-ruleset-test-api",
       "source": "./plugins/dev-ruleset-test-api",
-      "description": "TODO_AUTO_DESCRIPTION: Dev Ruleset Test API API"
+      "description": "Validate and enforce development compliance rules across your codebases and workflows."
     }
   ]
 }
