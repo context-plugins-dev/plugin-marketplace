@@ -2,7 +2,7 @@
   "name": "verizon",
   "displayName": "Verizon SDK",
   "version": "0.1.0",
-  "description": "TODO_AUTO_DESCRIPTION: Verizon API",
+  "description": "Manage network connectivity, device locations, and IoT deployments across Verizon's mobile infrastructure.",
   "author": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"
