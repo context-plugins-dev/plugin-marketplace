@@ -1,9 +1,0 @@
-{
-  "name": "ruleset-probe",
-  "displayName": "Ruleset Probe SDK",
-  "version": "0.1.0",
-  "description": "Throwaway plugin used to verify the marketplace sync workflow can push to main.",
-  "author": { "name": "APIMatic", "email": "developer@apimatic.io" },
-  "license": "MIT",
-  "skills": ["./skills/python"]
-}

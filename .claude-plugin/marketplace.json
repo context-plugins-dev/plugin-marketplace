@@ -35,11 +35,6 @@
       "name": "notiontest",
       "source": "./plugins/notiontest",
       "description": "Automate, test, and validate Notion workspace integrations and API workflows."
-    },
-    {
-      "name": "ruleset-probe",
-      "source": "./plugins/ruleset-probe",
-      "description": "Throwaway plugin used to verify the marketplace sync workflow can push to main."
     }
   ]
 }
