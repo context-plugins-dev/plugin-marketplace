@@ -13,6 +13,16 @@ SDK-identity and source-navigation entry point) plus `client-initialization`, `a
 coding agent loads the relevant skill by its description and grounds every SDK fact in the cloned
 SDK source those skills point it to.
 
+### C#/.NET — bundled SDK map + helper agent
+
+The C# layer (inside `skills/dotnet/`) ships a generated **SDK map**
+(`dotnet-test-getting-started/sdk-map.md` + `map/`) indexing every operation signature,
+model, enum, union, and error type. The **`dotnet-integrate-test`** router skill routes all
+C#/.NET SDK work to the single **`dotnet-test-sdk`** agent (.NET-only), which answers
+every contract question by map lookup (cloning the SDK source only when the map can't settle a
+fact) and produces a contract sheet before any code is written. Seven API-agnostic `dotnet-*`
+skills layer usage guidance on top.
+
 ## Supported languages
 
 | Language | Skill prefix | Key runtime dependency |

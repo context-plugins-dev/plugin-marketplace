@@ -2,7 +2,7 @@
   "name": "test",
   "displayName": "test SDK",
   "version": "0.1.0",
-  "description": "Send, manage, and inspect test data and mock HTTP requests.",
+  "description": "TODO_AUTO_DESCRIPTION: test API",
   "author": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"
@@ -31,5 +31,8 @@
     "./skills/python",
     "./skills/ruby",
     "./skills/go"
+  ],
+  "agents": [
+    "./agents/dotnet-test-sdk.md"
   ]
 }

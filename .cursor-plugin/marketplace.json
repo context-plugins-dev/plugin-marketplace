@@ -24,7 +24,7 @@
     {
       "name": "test",
       "source": "./plugins/test",
-      "description": "Send, manage, and inspect test data and mock HTTP requests."
+      "description": "TODO_AUTO_DESCRIPTION: test API"
     },
     {
       "name": "discourse-api-documentation",
