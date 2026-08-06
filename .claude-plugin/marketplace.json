@@ -49,7 +49,7 @@
     {
       "name": "paypal",
       "source": "./plugins/paypal",
-      "description": "TODO_AUTO_DESCRIPTION: paypal API"
+      "description": "Process online payments, accept credit cards, and manage digital transactions globally with PayPal."
     }
   ]
 }
