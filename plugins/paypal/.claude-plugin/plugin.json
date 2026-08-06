@@ -1,0 +1,36 @@
+{
+  "name": "paypal",
+  "displayName": "paypal SDK",
+  "version": "0.1.0",
+  "description": "TODO_AUTO_DESCRIPTION: paypal API",
+  "author": {
+    "name": "APIMatic",
+    "email": "developer@apimatic.io"
+  },
+  "license": "MIT",
+  "homepage": "https://www.apimatic.io",
+  "repository": "https://github.com/context-plugins-dev/plugin-marketplace",
+  "keywords": [
+    "apimatic",
+    "sdk",
+    "api-integration",
+    "paypal",
+    "dotnet",
+    "typescript",
+    "java",
+    "php",
+    "python",
+    "ruby"
+  ],
+  "skills": [
+    "./skills/dotnet",
+    "./skills/typescript",
+    "./skills/java",
+    "./skills/php",
+    "./skills/python",
+    "./skills/ruby"
+  ],
+  "agents": [
+    "./agents/dotnet-paypal-sdk.md"
+  ]
+}
