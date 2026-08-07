@@ -151,6 +151,8 @@ Both knobs above are load-bearing and they answer different failures: `PooledCon
 fresh behind a long-lived client, and `Timeout` stops a hung provider from pinning a request thread. Setting
 only the first is the common mistake — it looks like the resilience box is ticked.
 
+random change
+
 Then inject it:
 
 ```csharp
