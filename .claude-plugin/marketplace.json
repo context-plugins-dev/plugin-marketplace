@@ -44,7 +44,8 @@
     {
       "name": "verizon",
       "source": "./plugins/verizon",
-      "description": "Manage network connectivity, device locations, and IoT deployments across Verizon's mobile infrastructure."
+      "description": "TODO_AUTO_DESCRIPTION: Verizon API",
+      "version": "0.2.0"
     },
     {
       "name": "paypal",

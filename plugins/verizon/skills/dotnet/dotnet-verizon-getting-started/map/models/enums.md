@@ -62,6 +62,6 @@
 | `Type7` | StringEnum | `NewSharp (newSharp)`, `Traveled (traveled)`, `TrafficPolished (trafficPolished)`, `ExcessTar (excessTar)` | Indicates the type of asphalt or tar. | `Models/Enums/Type7.cs` |
 | `Type8` | StringEnum | `PackedOiled (packedOiled)`, `Loose (loose)` | Indicates the type of gravel. | `Models/Enums/Type8.cs` |
 | `Type9` | StringEnum | `LessThan30Mph (lessThan30Mph)` | Indicates the surface of the roadway is grass with low speed limit. | `Models/Enums/Type9.cs` |
-| `TypeModel` | StringEnum | `FeatureCollection (FeatureCollection)` | — | `Models/Enums/TypeModel.cs` |
+| `TypeEnum` | StringEnum | `FeatureCollection (FeatureCollection)` | — | `Models/Enums/TypeEnum.cs` |
 | `Unit` | StringEnum | `Minutes (minutes)`, `Hours (hours)` | — | `Models/Enums/Unit.cs` |
 | `UpgradeStatus` | StringEnum | `RequestPending (RequestPending)`, `Queued (Queued)`, `RequestFailed (RequestFailed)`, `InProgress (InProgress)`, `Finished (Finished)`, `UpgradeFailed (UpgradeFailed)` | The status of the upgrades that you want to retrieve. | `Models/Enums/UpgradeStatus.cs` |

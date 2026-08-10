@@ -1,8 +1,8 @@
 {
   "name": "verizon",
   "displayName": "Verizon SDK",
-  "version": "0.1.0",
-  "description": "Manage network connectivity, device locations, and IoT deployments across Verizon's mobile infrastructure.",
+  "version": "0.2.0",
+  "description": "TODO_AUTO_DESCRIPTION: Verizon API",
   "author": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"
@@ -19,16 +19,14 @@
     "typescript",
     "java",
     "php",
-    "python",
-    "go"
+    "python"
   ],
   "skills": [
     "./skills/dotnet",
     "./skills/typescript",
     "./skills/java",
     "./skills/php",
-    "./skills/python",
-    "./skills/go"
+    "./skills/python"
   ],
   "agents": [
     "./agents/dotnet-verizon-sdk.md"
