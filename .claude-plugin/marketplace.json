@@ -44,7 +44,7 @@
     {
       "name": "verizon",
       "source": "./plugins/verizon",
-      "description": "TODO_AUTO_DESCRIPTION: Verizon API",
+      "description": "Build, scale, and manage IoT device connectivity across global networks with Verizon.",
       "version": "0.2.0"
     },
     {

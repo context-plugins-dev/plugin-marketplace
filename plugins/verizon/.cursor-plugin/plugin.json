@@ -2,7 +2,7 @@
   "name": "verizon",
   "displayName": "Verizon SDK",
   "version": "0.2.0",
-  "description": "TODO_AUTO_DESCRIPTION: Verizon API",
+  "description": "Build, scale, and manage IoT device connectivity across global networks with Verizon.",
   "author": {
     "name": "APIMatic",
     "email": "developer@apimatic.io"
