@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """
-Keeps each plugin's three manifests on one, correctly-incrementing version.
+Checks that every touched plugin's `version` was genuinely bumped.
 
 Every plugin carries the same `version` in `plugin.json`, `.claude-plugin/plugin.json`, and
-`.cursor-plugin/plugin.json` (see CLAUDE.md's "Per-IDE manifest convention"). A commit that touches
-a plugin is supposed to bump that version, but nothing enforces it — a forgotten bump, an edit to
-only one of the three files, or an accidental downgrade all land silently. This script runs after
-such a commit and repairs it:
+`.cursor-plugin/plugin.json` (see CLAUDE.md's "Per-IDE manifest convention"). A commit or PR that
+touches a plugin is supposed to bump that version in all three manifests. This script fails the
+build instead of fixing anything up, so a bad version never lands:
 
   1. For each plugin whose directory changed between BASE_SHA and HEAD, read the version each of
      the three manifests declares now, and what they declared at BASE_SHA.
-  2. If the highest version declared now is a genuine semver increase over the highest version
-     declared at BASE_SHA, that is the intended bump — every manifest is synced to it.
-  3. Otherwise (unchanged, or a downgrade in any file), nothing in this commit can be trusted as
-     the new version, so the previous version's patch component is incremented by one instead.
-  4. All three manifests are rewritten to agree on the resulting version.
+  2. All present manifests must declare the same version now — a bump applied to only some of the
+     three files is an error, not something to sync silently.
+  3. If the plugin existed at BASE_SHA, the new version must be a genuine semver increase over the
+     highest version declared there (0.1.0 -> 0.1.1 or 0.1.0 -> 1.2.3 are valid; 0.1.3 -> 0.1.0 or
+     0.1.3 -> 0.1.3 are not).
 
-A plugin with no BASE_SHA history (new in this push) has nothing to compare against, so step 2/3 is
-skipped and its declared versions are simply synced to the highest one given.
+A plugin with no BASE_SHA history (new in this push/PR) has nothing to compare against, so step 3
+is skipped — it only needs to satisfy step 2.
 
-Idempotent: re-running against an already-consistent set of manifests touches nothing, which is
-what lets the calling workflow's rebase-retry loop call this again after every reset.
+This script never writes to the manifests or to git; it only inspects them and exits non-zero on
+any problem.
 """
 from __future__ import annotations
 
@@ -84,23 +83,12 @@ def max_version(raw_versions):
     return best_raw
 
 
-def bump_patch(raw: str) -> str:
-    major, minor, patch, _pre = parse_version(raw)
-    return f"{major}.{minor}.{patch + 1}"
-
-
 def git_show(ref: str, relpath: str):
     result = subprocess.run(
         ["git", "show", f"{ref}:{relpath}"],
         cwd=REPO_ROOT, capture_output=True, text=True,
     )
     return result.stdout if result.returncode == 0 else None
-
-
-def write_json(path: pathlib.Path, data) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    tmp.replace(path)
 
 
 def changed_plugin_ids(base_sha: str) -> list[str]:
@@ -116,10 +104,9 @@ def changed_plugin_ids(base_sha: str) -> list[str]:
     return sorted(ids)
 
 
-def process_plugin(plugin_id: str, base_sha: str, problems: list[str], touched: list[str], report: list[str]) -> None:
+def check_plugin(plugin_id: str, base_sha: str, problems: list[str], report: list[str]) -> None:
     root = PLUGINS_DIR / plugin_id
-    current = {}   # label -> raw version string
-    loaded = {}    # label -> (path, parsed json data)
+    current = {}  # label -> raw version string
 
     for label in MANIFEST_LABELS:
         path = root / label
@@ -135,14 +122,19 @@ def process_plugin(plugin_id: str, base_sha: str, problems: list[str], touched: 
             problems.append(f"{plugin_id}: {label} has no 'version' field")
             continue
         current[label] = version
-        loaded[label] = (path, data)
 
     if not current:
         return
 
-    candidate = max_version(current.values())
+    distinct = set(current.values())
+    if len(distinct) > 1:
+        problems.append(f"{plugin_id}: manifests disagree on version: {current}")
+        return
+
+    candidate_raw = next(iter(distinct))
+    candidate = parse_version(candidate_raw)
     if candidate is None:
-        problems.append(f"{plugin_id}: no manifest has a parseable semver version {current}")
+        problems.append(f"{plugin_id}: '{candidate_raw}' is not a valid semver version")
         return
 
     baseline = {}
@@ -158,25 +150,22 @@ def process_plugin(plugin_id: str, base_sha: str, problems: list[str], touched: 
         if version:
             baseline[label] = version
 
-    prev_candidate = max_version(baseline.values()) if baseline else None
+    if not baseline:
+        report.append(f"{plugin_id}: new plugin at {candidate_raw} — nothing to compare")
+        return
 
-    if prev_candidate is None:
-        final, reason = candidate, "new plugin — synced to its declared version"
-    elif compare_versions(parse_version(candidate), parse_version(prev_candidate)) > 0:
-        final, reason = candidate, f"valid bump from {prev_candidate}"
+    prev_raw = max_version(baseline.values())
+    prev = parse_version(prev_raw) if prev_raw else None
+    if prev is None:
+        report.append(f"{plugin_id}: no parseable previous version — nothing to compare")
+        return
+
+    if compare_versions(candidate, prev) > 0:
+        report.append(f"{plugin_id}: OK ({prev_raw} -> {candidate_raw})")
     else:
-        final, reason = bump_patch(prev_candidate), f"not upgraded from {prev_candidate} — bumped patch"
-
-    changed = False
-    for label, (path, data) in loaded.items():
-        if data.get("version") != final:
-            data["version"] = final
-            write_json(path, data)
-            touched.append(path.relative_to(REPO_ROOT).as_posix())
-            changed = True
-
-    if changed:
-        report.append(f"{plugin_id}: -> {final} ({reason})")
+        problems.append(
+            f"{plugin_id}: version {candidate_raw} is not an increase over previous version {prev_raw}"
+        )
 
 
 def main() -> int:
@@ -194,29 +183,21 @@ def main() -> int:
         return 0
 
     problems: list[str] = []
-    touched: list[str] = []
     report: list[str] = []
     for plugin_id in plugin_ids:
-        process_plugin(plugin_id, base_sha, problems, touched, report)
+        check_plugin(plugin_id, base_sha, problems, report)
 
-    touched_out = os.environ.get("TOUCHED_FILES_OUT")
-    if touched_out:
-        pathlib.Path(touched_out).write_text(
-            "".join(f"{p}\n" for p in touched), encoding="utf-8"
-        )
-    names_out = os.environ.get("CHANGED_PLUGINS_OUT")
-    if names_out:
-        changed_ids = sorted({line.split(":", 1)[0] for line in report})
-        pathlib.Path(names_out).write_text(",".join(changed_ids), encoding="utf-8")
-
+    print(f"Checked {len(plugin_ids)} plugin(s):")
+    for line in report:
+        print(f"  - {line}")
     for problem in problems:
         print(f"  ! {problem}", file=sys.stderr)
-    if report:
-        print(f"Checked {len(plugin_ids)} plugin(s); updated {len(touched)} file(s):")
-        for line in report:
-            print(f"  - {line}")
-    else:
-        print(f"Checked {len(plugin_ids)} plugin(s) — versions already in sync.")
+
+    if problems:
+        print(f"\n{len(problems)} plugin version problem(s) found.", file=sys.stderr)
+        return 1
+
+    print("All plugin versions OK.")
     return 0
 
 
