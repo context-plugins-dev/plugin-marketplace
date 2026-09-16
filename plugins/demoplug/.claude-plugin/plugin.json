@@ -1,0 +1,2 @@
+{ "name": "demoplug", "displayName": "demoplug SDK", "version": "0.1.0",
+  "description": "Demo plugin for case testing.", "skills": ["./skills/python"] }
