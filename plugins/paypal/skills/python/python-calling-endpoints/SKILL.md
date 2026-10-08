@@ -1,191 +1,284 @@
 ---
 name: python-calling-endpoints
-description: Call API operations on an APIMatic-generated Python SDK — access the controller via a @LazyProperty on the client (not a constructor), all parameters are keyword args, optional params default to APIHelper.SKIP (not None), request models are plain classes built with positional or keyword args, the return is a typed model or primitive (not a wrapper), paginated operations return PagedIterable, and status/headers are captured via HttpCallBack. Use whenever invoking an endpoint, building a request, working out which params are required vs optional, or consuming a response from any APIMatic Python SDK — load it even after reading the signature in the source, since it doesn't warn you about the SKIP sentinel, the property-not-constructor controller access, or the PagedIterable return.
+description: Calling operations on an APIMatic-generated Python SDK — finding the group that owns an operation, the positional/keyword-only split and the parameters that never appear in the signature at all, passing a body as a model or a dict, uploading a file or a raw binary body, the two response modes, consuming a streamed file response, consuming an event stream, per-call request options, and async usage. Load before writing the first call to an SDK operation, or when an operation's shape or return type is unclear.
 ---
 
 # Calling endpoints on an APIMatic Python SDK
 
-> `PaypalServersdkClient` is the SDK's client class — **read the real name** from `paypal/paypal_client.py`
-> (it is derived from the package name, not the API title, so do not guess it from the API name).
+Operations are methods on **group accessors** of the client, named in `snake_case`:
+`client.{group}.{operation}(...)`. An operation that belongs to no group sits **directly on the
+client**, called `client.{operation}(...)`. The accessor, the exact operation name and its signature
+come from the contract sheet, grounded in the SDK map's per-controller page
+(`map/operations/{group}.md`), whose block for each operation is headed by its full accessor path and
+carries the signature verbatim — operation names follow no fixed verb/resource pattern, so take the
+real name from the sheet, never from memory.
 
-Operations are **synchronous methods** on a **controller** you get from the client as a
-`@LazyProperty`. Access the controller as a property, then call the operation:
-
-```python
-result = client.{resource}.{operation}(...)
-```
-
-Open `paypal/paypal_client.py` for the controller property names, then the relevant
-`paypal/controllers/{resource}_controller.py` for the operation's exact signature.
-
-> Throughout, `{...}` tokens are placeholders for names you take from your SDK — replace them with
-> the concrete identifiers from the source. The generated `doc/controllers/*.md` files list every
-> operation with its signature and a usage snippet.
-
-## Controller access — property, not constructor
-
-Controllers are `@LazyProperty` properties on `PaypalServersdkClient`. Access them as attributes:
-
-```python
-# Correct — the controller is a property:
-result = client.authentication.custom_authentication()
-result = client.transaction.fetch_with_offset(offset=0, limit=10)
-
-# Wrong — don't instantiate controllers yourself:
-# ctrl = AuthenticationController(...)
-```
-
-Each controller is initialized lazily on first access and cached for the client's lifetime.
+> Throughout this skill, `{...}` is a placeholder for a name you take from your SDK (e.g. `{group}`,
+> `{operation}`, `{Model}`) — replace it with the concrete identifier from the source.
 
 ## Method signature convention
+
+Every endpoint lays its parameters out in the same fixed shape:
 
 ```python
 def {operation}(
     self,
-    required_param,                    # required — no default
-    optional_param=APIHelper.SKIP,     # optional — use SKIP sentinel, not None
-) -> {ReturnType}:
+    {required params},                  # path, then query, then header, then body — in that order
+    *,
+    {optional params} = {default},      # same source order
+    request_options = None,             # always the last slot
+) -> {ReturnType}: ...
 ```
 
-- **`APIHelper.SKIP`** is the sentinel for optional fields and parameters that are absent. When you
-  omit a kwarg that defaults to `SKIP`, it is excluded from the serialized request entirely. Passing
-  `None` explicitly may serialize as JSON `null` instead of omitting the field — use `SKIP` or
-  omit the kwarg.
-- **Return type is the typed model or primitive directly** — not a wrapper object. `{ReturnType}` is
-  whatever type the operation returns (a model class, `str`, `int`, `list`, etc.).
-- On a non-2xx response the method **raises `APIException`** (or a typed subclass) — see
-  **python-error-handling**.
+Everything after `*` is keyword-only and **every one of them has a real default**, so there is no
+parameter you must pass `None` to just to reach a later one. Omit what you do not need; spelling out
+`some_header=None, some_filter=None` is noise that hides the parameters you meant to set.
 
-## Passing parameters
+### Where a parameter lands — the rule
 
-All parameters are passed by keyword. Required parameters have no default; optional parameters
-default to `APIHelper.SKIP`:
+Each parameter the description declares produces **one of three** outcomes, and the third one catches
+people out:
+
+| What the description declares | What you get |
+|---|---|
+| **required**, no fixed value | a **positional** parameter, no default |
+| **optional** | a **keyword-only** parameter defaulting to `None` |
+| a **default value** | a **keyword-only** parameter defaulting to *that value* — even if the parameter is required |
+| a **constant** value | **no parameter at all** — the value is baked into the request and you cannot change it |
+
+Two consequences worth stating on the contract sheet:
+
+- **"Required" does not mean "path".** Positional parameters are ordered **path → query → header →
+  body**, so a required *query* or *header* parameter is positional too, sitting between the path
+  parameters and the body. Take the boundary from the sheet; never infer it from the URL.
+- **A parameter with a declared default is keyword-only whatever its optionality**, and the SDK sends
+  that default on every call you don't override.
+
+### Non-`None` defaults silently narrow what comes back
+
+This is the single most common wasted afternoon on a generated SDK. A parameter carrying a
+spec-declared default is *always sent*, so the response you get is the one that default asked for —
+not the full resource. Typical shapes:
+
+- a representation/verbosity switch defaulting to the minimal form, so a create returns little more
+  than an id, a status and some links;
+- a field-selector defaulting to one section, so whole branches of the response are simply absent.
+
+Read the sheet's default column **before** concluding the API dropped data. It was never requested.
+
+## Passing a body
+
+How the body appears depends on the media type the operation declares. The operation's map block
+settles both: its **Params** bullet labels the body parameter with its media type (`body — JSON
+body`), and its **Type sources** table names the module declaring the request model and its `…Dict`
+companion.
+
+**JSON** — one parameter, typed as a union of the model and its `TypedDict` companion, so both
+spellings type-check:
 
 ```python
-# Required only:
-result = client.{resource}.get_{item}(
-    item_id='abc123'
-)
+from {root_package}.models import {Model}
 
-# Required + optional:
-result = client.{resource}.list_{items}(
-    status='active',           # required
-    page=1,                    # optional — can omit to use the API's default
-    limit=50                   # optional — can omit
-)
+client.{group}.{operation}({Model}(field=...))    # model
+client.{group}.{operation}({"field": ...})        # dict — companions nest too
 ```
 
-## Building request models
+Prefer models in application code: better inference, better errors, and required members are enforced
+at construction. The dict form suits payloads assembled from external data. See `python-models`.
 
-Request bodies are plain Python classes built with keyword arguments. Required constructor params
-have no default; optional params default to `APIHelper.SKIP`:
+**Form and multipart** — there is **no single body parameter**. Each field (and each file) becomes its
+own parameter, following the same three-way split rule above. Do not go looking for a `body=`; read the
+signature. An optional part is omitted by leaving its parameter at its default: a part passed `None`
+is dropped from the body rather than sent empty.
+
+**Raw binary** — one parameter typed `FileInput` (`AsyncFileInput` on the async client), sent as the
+whole body with no wrapper around it.
+
+**A text body** — the parameter takes the schema's own type: a `str` for a text schema, and the upload
+alias above for a binary one. It is sent as the body as it stands and handed back the same way, and
+nothing is encoded or decoded for you — where an endpoint asks for base64, pass content that already is
+base64 and decode a base64 response yourself. Arbitrary binary belongs in a raw-binary or multipart
+position.
+
+**No payload** — no body parameter at all.
+
+**An optional-looking body is not permission to omit it.** A body typed `... | None = None` reflects
+what the *description* marked optional, not what the endpoint needs. A create whose body is optional in
+the spec will type-check with no arguments and then fail at the provider. Where a call obviously needs
+a payload, pass one.
+
+Serialization happens while the request is built, **before** anything is sent — so a body the SDK
+cannot dump raises out of the call with no request made. See `python-models`.
+
+### File and binary parameters
+
+**One name per client, whichever position it is.** A multipart file part and a raw binary body take
+the same alias, and only the client you called decides which: `FileInput` on the sync client,
+`AsyncFileInput` on the async one, and `list[…]` of either for an array part. Both are imported from
+`{root_package}.core`.
+
+Nothing validates a file, so what the alias accepts is wider than the annotation shows — `bytes`, a
+`Path`, any object with a binary `read`, a chunk iterator, and an `anyio`-style handle on the async
+client. Which one you pass has consequences the signature cannot show: what stays resident, what can
+be re-sent, who closes your handle, whether the body goes out sized or chunked, and what the file is
+called on the wire. There is **no `str` arm** at either position — wrap a path in `Path`.
 
 ```python
-from paypal.models.{request_model} import {RequestModel}
+from pathlib import Path
 
-body = {RequestModel}(
-    required_field='value',         # required — must be provided
-    optional_field='value',         # optional — omit or pass SKIP to exclude
-)
-result = client.{resource}.create_{item}(body=body)
+client.{group}.{operation}(Path("invoice.pdf"))    # the default: streams, sized, names itself
 ```
 
-Open `paypal/models/{model}.py` to confirm the `_names`, `_optionals`, and constructor args.
-The `_names` dict maps Python attribute names to JSON keys; the `_optionals` list names fields that
-use `APIHelper.SKIP` as their default.
+**Load `python-file-handling`** before passing anything other than a `Path`, and before consuming a
+file an operation returns. It carries the arm-by-arm decision with its costs, the three behaviours
+that differ between a part and a raw body, overriding the filename or media type, and how to read a
+`FileResponse` without leaking its connection.
 
-## Enums as parameters
 
-Enum fields take the generated class's integer or string attribute value. APIMatic Python enums are
-plain classes (not Python `Enum` subclasses) with `MEMBER = value` class attributes and a
-`from_value()` class method:
+## Making the call and reading the response
+
+Operations come in two forms, and choosing between them is a real design decision.
+
+**Parsed (the default).** Returns the decoded payload directly — no envelope to unwrap. On a non-2xx it
+raises `ApiError`:
 
 ```python
-from paypal.models.suite_code_enum import SuiteCodeEnum
-
-# Known constant:
-client.{resource}.{operation}(suites=SuiteCodeEnum.HEARTS)
-
-# Runtime value — convert with from_value:
-suites = SuiteCodeEnum.from_value(server_value, default=SuiteCodeEnum.HEARTS)
+value = client.{group}.{operation}(...)
 ```
 
-See **python-models** for full enum representation.
-
-## Reading the response
-
-Operations return a typed model or primitive directly. The exact type varies per operation — open
-the controller method to see the return type annotation and the deserializer registered in
-`ResponseHandler`:
+**Non-raising — `with_raw_response`.** Returns a result you branch on. Use it when you need the
+**status code or response headers** (the parsed form exposes neither on success, except for a file
+response, which carries its own `headers`), or when a non-2xx is
+an expected outcome rather than an exception:
 
 ```python
-# Model return:
-user = client.authentication.o_auth_authorization_grant()
-print(user.id, user.email)
+from {root_package}.core import Success, Failure
 
-# Primitive return:
-text = client.authentication.custom_authentication()  # returns str
+match client.{group}.with_raw_response.{operation}(...):
+    case Success(payload=value, status_code=status):
+        print(status, value)
+    case Failure(error=err, status_code=status):
+        print(status, err)
 ```
 
-Response body fields that were optional and absent in the JSON will not have the attribute set on
-the model (check with `hasattr(model, 'field')`), because optional fields use `APIHelper.SKIP`.
+Both are frozen dataclasses, so `match` needs no boilerplate and `isinstance` narrowing is equivalent.
+`.unwrap()` collapses either back to the payload — which is literally how the parsed form is built:
+every parsed method is its raw peer plus `.unwrap()`.
 
-## Accessing HTTP metadata — HttpCallBack
+**`with_raw_response` removes one exception path, not the need for a `try`.** Two failures still raise
+in both modes: a failed token fetch (it unwraps internally), and any decode failure. See
+`python-error-handling`.
 
-The controller method itself returns only the deserialized body. To access the raw HTTP status
-code, headers, or response text, pass an `HttpCallBack` to the client and inspect it after the
-call. The generated `HttpResponseCatcher` (in `tests/http_response_catcher.py`) shows the pattern:
+### Return types
+
+Five shapes, and the sheet names which one each operation has — the map block states it directly as
+**Returns (parsed)** and **Returns (raw)**:
+
+- **A decoded model** — the JSON case, and the common one.
+- **Text** — a `str` or other scalar, for an operation declaring a text response.
+- **A file** — `FileResponse` (`AsyncFileResponse` on the async client), for an operation declaring a
+  binary response. Unlike the others it arrives **unread** and holds a connection; see below.
+- **An event stream** — `EventStream[T]` (`AsyncEventStream[T]` on the async client), for an operation
+  declaring a `text/event-stream` response. It arrives **unread**, holds a connection, and iterating
+  it yields `T`; see below.
+- **`None`** — the operation declares no response body.
+
+**`-> None` means the call succeeded.** Do not bind it and do not test it — success is "no exception
+raised", exactly as for the others. Two follow-ons: if you need the resulting state, re-read it with a
+separate call; and if you need the status code (`200` vs `204`), the raw peer is `ApiResult[None, ...]`
+and `Success(payload=None, status_code=...)` is the only place it appears.
+
+Writing `value = client.{group}.{operation}(...)` on a `-> None` operation type-checks under a loose
+annotation and then fails later with an `AttributeError` on `None`.
+
+### Consuming a file response
+
+A `FileResponse` is a body that has **not been read yet** and holds its connection until it is,
+which makes it the one return value with a lifecycle. Three calls consume it and all three close it —
+`save_to(...)`, `read()`, or a drained `iter_bytes()` under `with` — and the async twin mostly
+`a`-prefixes them.
+
+Getting this wrong leaks a connection rather than raising, so **load `python-file-handling`** before
+writing the consuming code. It carries the lifecycle in full: which warning fires when one is
+abandoned and how to make it fail a test, the single-use rule, what `save_to` does with a directory,
+and why a `try` around the call alone catches nothing.
+
+### Consuming an event stream
+
+An `EventStream[T]` is iterated, not read: a drained `for` releases its connection, and any early exit
+needs `with`. **Load `python-event-streams`** before writing the loop — it carries the lifecycle, the
+union narrowing, and the failures that are silent.
+
+
+## Per-call overrides — `request_options`
+
+Every operation's last parameter is `request_options`, the SDK's single per-call override channel,
+accepted typed or dict-shaped:
 
 ```python
-from paypal.http.http_call_back import HttpCallBack
-
-class ResponseCapture(HttpCallBack):
-    def on_before_request(self, request):
-        pass
-    def on_after_response(self, response):
-        self.last_response = response
-
-capture = ResponseCapture()
-client = PaypalServersdkClient(http_call_back=capture, ...)
-result = client.authentication.custom_authentication()
-print(capture.last_response.status_code)
-print(capture.last_response.headers)
-print(capture.last_response.text)
+client.{group}.{operation}(..., request_options={"timeout": 5.0})
 ```
 
-`HttpResponse` attributes: `status_code` (`int`), `reason_phrase` (`str`), `headers` (`dict`),
-`text` (`str`), `request` (`HttpRequest`).
+The keys are exactly `timeout` (seconds, must be > 0), `extra_headers`, and the two retry overrides
+`max_retries` and `status_codes_to_retry` (`python-configuration-resilience`). It is validated with
+`extra="forbid"`, so `{"timeuot": 5}` raises `ValidationError` rather than being ignored — and because
+the dict form is a closed `TypedDict`, a type checker catches it at the call site first.
 
-## Paginated operations
+`extra_headers` wins over both the API's and the endpoint's own headers, which makes it the deliberate
+way to override a header the SDK sets — including blanking an auth header for a call meant to go out
+anonymous. That precedence is a footgun as much as a feature: setting `authorization` here overrides
+the managed token.
 
-When the API supports pagination, the generated controller returns a `PagedIterable`. Iterate over
-items directly or iterate over pages:
+Two mechanics:
+
+- **Header names are lowercased on the way out**, at every layer including yours, so the merge is
+  genuinely case-insensitive and the request reaching the transport is keyed in lowercase. Look
+  request headers up that way (`python-testing`).
+- **`Cookie` folds instead of replacing.** Every other field takes the later layer and discards the
+  earlier; a cookie you add joins the jar alongside whatever the endpoint or a credential put there
+  (RFC 6265 permits one `Cookie` field). So a cookie-carried credential cannot be blanked with
+  `extra_headers` the way a header-carried one can.
+
+## Async
+
+The async client's operations are identical in name and parameters — you await them. There is no
+`_async` suffix and no separate method list; the client class you hold decides the flavour:
 
 ```python
-# Iterate over individual items (across all pages):
-for transaction in client.transaction.fetch_with_offset(offset=0, limit=10):
-    print(transaction.id)
+value = await client.{group}.{operation}(...)
 
-# Iterate over pages (each page is a PagedResponse subclass):
-for page in client.transaction.fetch_with_offset(offset=0, limit=10).pages():
-    print(page.offset)       # for OffsetPagedResponse
-    for item in page.items():
-        print(item.id)
+match await client.{group}.with_raw_response.{operation}(...):
+    case Success(payload=value): ...
 ```
 
-Page types (`OffsetPagedResponse`, `CursorPagedResponse`, `LinkPagedResponse`,
-`NumberPagedResponse`) expose a pagination cursor or next-link and an `items()` method that returns
-an iterator over the items on that page. Inspect `paypal/pagination/` in the source.
+Do not mix the two clients in one call path (`python-client-initialization`).
 
-## Finding the right method
+To run independent calls concurrently — the main reason to choose the async client at all — gather
+them, but bound the concurrency: `gather` over a long list opens as many simultaneous requests as the
+list is long, against a provider that rate-limits.
 
-- Controller property names are on `PaypalServersdkClient` in `paypal/paypal_client.py`.
-- Operation method signatures are in `paypal/controllers/{resource}_controller.py`.
-- `doc/controllers/*.md` lists every operation with parameters and usage snippets — grep it first.
-- Request/response model types are under `paypal/models/`; enum types have `from_value()`.
+```python
+sem = asyncio.Semaphore(10)
+
+async def one(arg):
+    async with sem:
+        return await client.{group}.{operation}(arg)
+
+results = await asyncio.gather(*(one(a) for a in args))
+```
+
+## Timeouts and cancellation
+
+There is no cancellation-token parameter. Python's own mechanisms apply:
+
+- **Per call** — `request_options={"timeout": ...}`, which sets the limit on each wait for this one request.
+- **The whole call** — `asyncio.wait_for(...)` around it, in async code; see
+  `python-configuration-resilience`.
+- **Sync code has no whole-call limit.** The timeout only limits each wait — set one anyway.
 
 ## Next
 
-- Build complex models, enums, unions → **python-models**
-- Errors and status codes → **python-error-handling**
-- Pagination, retries, timeouts → **python-configuration-resilience**
+- Models, enums, `UNSET` → **python-models**
+- Exceptions and error unions → **python-error-handling**
+- Timeouts, base URLs, proxies, and **verifying a new call on the wire** →
+  **python-configuration-resilience**
