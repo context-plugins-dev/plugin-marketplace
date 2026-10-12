@@ -1,7 +1,7 @@
 {
   "name": "verizon",
   "displayName": "Verizon SDK",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Build, scale, and manage IoT device connectivity across global networks with Verizon.",
   "author": {
     "name": "APIMatic",
@@ -21,7 +21,6 @@
     "php",
     "python"
   ],
-  "logo": "assets/logo.svg",
   "skills": [
     "./skills/dotnet",
     "./skills/typescript",
@@ -29,5 +28,7 @@
     "./skills/php",
     "./skills/python"
   ],
-  "agents": "agents-vscode/"
+  "agents": [
+    "./agents/dotnet-verizon-sdk.md"
+  ]
 }

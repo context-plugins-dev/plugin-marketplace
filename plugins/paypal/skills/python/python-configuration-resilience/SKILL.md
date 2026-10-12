@@ -1,186 +1,366 @@
 ---
 name: python-configuration-resilience
-description: Tune an APIMatic-generated Python SDK client — retry defaults (max_retries=0 off by default; only GET/PUT retried when enabled; configurable retry_statuses and retry_methods), timeout in seconds, custom requests.Session via http_client_instance, Environment enum and get_base_uri for base URL, paginated operations via PagedIterable or manual page params, and request/response logging via HttpCallBack. Use whenever adjusting retries, timeout, the HTTP session, base URL, paging, or logging on any APIMatic Python SDK — load it even after reading the Configuration kwargs in the source, since the kwarg names alone don't tell you that retries are off by default, which methods are retried, how to redirect requests to a mock host, or that HttpCallBack is the logging seam.
+description: Client configuration and resilience for an APIMatic-generated Python SDK — server and base-URL selection, the retry policy (on by default, off with `max_retries=0`) and what it will and will not repeat, what a timeout actually bounds, proxies and TLS, and the built-in HTTP logging (off by default; the standard `logging` module or `{ROOT_PACKAGE}_LOG` turns it on, `logging_options` picks the dumps, a per-call `log_level` quietens one call). Load before you configure or tune the client — the keyword names alone do not reveal what is handled for you and what is not.
 ---
 
 # Configuration & resilience for an APIMatic Python SDK
 
-> `PaypalServersdkClient` is the SDK's client class — **read the real name** from `paypal/paypal_client.py`
-> (it is derived from the package name, not the API title, so do not guess it from the API name).
+> Throughout this skill, `{...}` is a placeholder for a name you take from your SDK (e.g. `{Api}Client`,
+> `{group}`, `{root_package}`) — replace it with the concrete identifier from the source.
 
-All settings are passed as keyword arguments to `Configuration.__init__` (or to `PaypalServersdkClient`
-directly, which wraps them in a `Configuration` internally). Confirm defaults from
-`paypal/configuration.py` in the cloned source.
+Configuration is not an options object here. Everything is either a **constructor keyword** on the
+client (`python-client-initialization`), a field on a **config model** — the server config,
+`RetryOptions` or `LoggingOptions` — or a **per-call `request_options`**. There is no third place to look.
 
-> Throughout, `{...}` tokens are placeholders — replace with concrete names from your SDK.
+## What this SDK does not do for you
 
-## Retry configuration — off by default
+Read this before designing around a capability you assume exists. The generator emits **none** of the
+following, so each is yours to build or deliberately do without:
 
-Retries are **disabled out of the box** (`max_retries` defaults to `0`). Raise it to enable
-retries; leave it at `0` in tests so a stubbed 5xx fails immediately.
+| Capability | Status | What to do instead |
+|---|---|---|
+| **Streaming — file responses** | a `FileResponse` arrives with its body unread and holds its connection until you consume it | `save_to` / `read` / `iter_bytes` (see `python-file-handling`) |
+| **Streaming — SSE** | an `EventStream` arrives with its body unread; iterating yields each event's decoded data, and `timeout` bounds the gap between events | a `for` loop, or `with` for an early exit (see `python-event-streams`) |
+| **Request/response logging** | built in, **off by default** — a record per request, response, retry and failure through the standard `logging` module | Raise the `{root_package}` logger's level, or set `{ROOT_PACKAGE}_LOG`; see *Logging* below |
+| **Circuit breaking, rate limiting** | none | Your own, around the call |
+| **A mock/offline mode** | none | Point `base_url` at a mock server, or supply a fake transport (`python-testing`) |
 
-| Kwarg | Default | Notes |
-| --- | --- | --- |
-| `max_retries` | `0` | **0 disables retries** — set > 0 to enable |
-| `backoff_factor` | `2` | exponential backoff multiplier between attempts |
-| `retry_statuses` | `[408, 413, 429, 500, 502, 503, 504, 521, 522, 524]` | statuses that trigger a retry |
-| `retry_methods` | `["GET", "PUT"]` | **only idempotent methods**; POST/DELETE are not retried unless added |
+**Retries are on by default.** A client built without `retry_options` retries idempotent calls up to
+three times; set `max_retries` to `0` to turn that off — see *Retries* below.
 
-```python
-from paypal.configuration import Configuration, Environment
+What the SDK *does* own: the request pipeline, auth application and token caching, response decoding,
+error mapping, connection pooling, one timeout, HTTP logging (silent until its logger is raised),
+and — once you turn it on — the retry loop.
 
-config = Configuration(
-    environment=Environment.PRODUCTION,
-    max_retries=3,
-    backoff_factor=2,
-    retry_statuses=[429, 500, 502, 503, 504],
-    retry_methods=['GET', 'PUT'],
-)
-```
+## Server and base-URL configuration
 
-Add `POST` or `DELETE` to `retry_methods` only when the operation is genuinely idempotent.
+Server selection is **not** an environment enum. What the constructor accepts depends on what the
+description declares, in one of four shapes — take yours from the contract sheet, grounded in the SDK
+map's *Servers & auth* section, which names the environments and servers this SDK declares and so
+settles which arm it is:
 
-The retry mechanism is implemented inside `apimatic-requests-client-adapter` (using `urllib3.Retry`
-under the hood). The `backoff_factor` maps to urllib3's backoff: wait time between attempt `n`
-and `n+1` is `backoff_factor * (2 ** (n - 1))` seconds.
-
-## Timeout
-
-`timeout` is a per-attempt timeout in **seconds** (not milliseconds, not a total across retries):
+| The API declares | Constructor keywords |
+|---|---|
+| one server, one environment | `base_url: str \| None = None` |
+| one server, several environments | `environment` (a string literal alias with a default), then `base_url` |
+| several servers, one environment | `server_config: {Server}ConfigOrDict \| None = None` |
+| several servers, several environments | `environment`, then `timeout`, then `server_config` |
 
 ```python
-config = Configuration(timeout=30)   # 30 s per attempt
+client = {Api}Client(base_url="https://api.example.com", {scheme}=...)   # base-url arms
+client = {Api}Client(server_config={"{server}": {"base_url": "..."}}, {scheme}=...)   # several servers, ONE environment
+client = {Api}Client(environment="production", server_config={"{server}": {"production": {"base_url": "..."}}}, {scheme}=...)   # several servers, SEVERAL environments
 ```
 
-With `max_retries=3` and `timeout=30`, the worst-case wall time is `3 × 30 s = 90 s` plus backoff
-delay. To cap the entire operation, wrap the call in a thread with `threading.Timer`.
+**The two `server_config` arms nest differently, and every config model is `extra="forbid"`, so the
+wrong nesting raises `ValidationError` rather than being ignored.** With one environment each server's
+field holds `base_url` directly. With several, each server's field holds **one field per environment**
+and the `base_url` sits inside the environment's variant — passing `{"{server}": {"base_url": ...}}`
+there fails with `Extra inputs are not permitted`. Take the nesting from the SDK map's *Servers & auth*
+section rather than from this shape.
 
-## Custom HTTP session
+Either way `server_config` is a pydantic model with a dict companion, coerced through `.coerce()`,
+holding **one field per server the API declares**. Template variables sit beside `base_url` at
+whichever level carries it.
 
-Pass a `requests.Session` to `http_client_instance` when you need custom TLS settings, a shared
-connection pool, proxy routing, or transport-level hooks. Set
-`override_http_client_configuration=True` to allow the SDK to apply its own `timeout`,
-`max_retries`, and `backoff_factor` settings to your session:
+**Omitting the server keyword takes the description's own default, and that default is whatever the
+spec listed first — for many providers a sandbox.** Nothing announces it. A deployment that believes it
+configured production and did not gets sandbox behaviour with production credentials, which fails auth
+in a way that looks like a credentials problem, not an environment one. Pass the server explicitly in
+every environment, production included.
+
+**Server template variables are only reachable in the `server_config` arms.** They are fields on the
+config class, so where the constructor takes a `server_config` you set them there. Where it takes a
+`base_url`, the client builds the config itself — there is no path to a variable, and your only lever
+is replacing the whole URL with `base_url`. Variables always carry a declared default (a constant or an
+enum member), so a call still works untouched; it just goes wherever the default points.
+
+Resolve the environment from configuration with an explicit map and **fail on an unknown value** rather
+than falling through to a default:
 
 ```python
-import requests
-from paypal.configuration import Configuration
-
-session = requests.Session()
-session.verify = '/path/to/ca-bundle.pem'   # custom TLS CA
-
-config = Configuration(
-    http_client_instance=session,
-    override_http_client_configuration=True,
-    timeout=30,
-    max_retries=3,
-)
+BASE_URLS = {"sandbox": "https://sandbox.example.com", "live": "https://api.example.com"}
+base_url = BASE_URLS[settings.environment]     # KeyError beats a silently wrong environment
 ```
 
-When `override_http_client_configuration=False` (the default), the SDK uses your session as-is
-without applying its retry/timeout settings.
+Where the SDK manages OAuth, **the token endpoint is derived from the same server**, so environment and
+auth can never drift apart. Pointing `base_url` at a mock server or recording proxy therefore redirects
+the token fetch too.
 
-## Base URL and environment selection
+## Retries — on by default
 
-The base URL is derived from the `environment` kwarg (an `Environment` enum member in
-`paypal/configuration.py`) and any API-specific server parameters (e.g. `port`, `suites`):
+A client built without `retry_options` uses the **default policy** in the table below: a `GET`, `HEAD`,
+`PUT` or `OPTIONS` call that meets a `408`, `429`, `500`, `502`, `503`, `504` or a dropped connection is
+retried up to three times.
+Retrying is configured by one options class, `RetryOptions` (from `{root_package}.core`), passed to the
+client in any of four spellings:
 
 ```python
-from paypal.configuration import Configuration, Environment
+from {root_package}.core import HttpMethod, RetryOptions
 
-config = Configuration(
-    environment=Environment.PRODUCTION,
-    port='443',     # server parameter — per-API, check the source
-)
+client = {Api}Client(retry_options=3, {scheme}=...)                  # a count: max_retries=3, every other field at its default
+client = {Api}Client(retry_options={}, {scheme}=...)                 # every field at its default, as omitting it does
+client = {Api}Client(retry_options={"max_retries": 5}, {scheme}=...)  # a dict: the fields you name, the rest at their defaults
+methods: frozenset[HttpMethod] = frozenset({"GET"})                  # held in a variable: annotate it
+client = {Api}Client(
+    retry_options=RetryOptions(max_retries=5, http_methods_to_retry=methods),
+    {scheme}=...,
+)                                                                    # the model itself
 ```
 
-To see the URL each environment resolves to, read the `environments` dict in
-`paypal/configuration.py` and call `config.get_base_uri()` (or
-`config.get_base_uri(Server.AUTH)` for alternate server groups). There is no free-form base-URL
-string override — to redirect requests to a mock host, inject a custom `requests.Session` whose
-transport intercepts and rewrites the host (see **python-testing**).
+**Turning retries off** is `max_retries` set to `0`, in whichever spelling: `retry_options=0`,
+`{"max_retries": 0}` or `RetryOptions(max_retries=0)`. Leaving `retry_options` out, or passing `None`,
+`{}` or `RetryOptions()`, all give the **default policy** — none of them turns retrying off.
 
-`Configuration.from_environment()` reads `ENVIRONMENT`, `PORT`, `TIMEOUT`, `MAX_RETRIES`, etc.
-from environment variables or a `.env` file — grep `from_environment` in `paypal/configuration.py`
-for the exact variable names.
+`RetryOptions` is a frozen pydantic model and its dict companion is a closed `TypedDict`, so a misspelt
+key or an out-of-range value (a negative count, a `backoff_factor` below `1`) raises `ValidationError`
+at construction rather than being ignored.
 
-## Pagination
+| Field | Default | Meaning |
+|---|---|---|
+| `max_retries` | `3` | Retries *after* the first attempt; `0` disables |
+| `initial_delay` | `1.0` | Seconds before the first retry |
+| `backoff_factor` | `2.0` | Multiplier per retry; `1` keeps the delay constant |
+| `max_delay` | `60.0` | Ceiling on any one wait, a `Retry-After` included |
+| `max_jitter` | `0.5` | Widest random addition to a wait, in seconds; `0` removes it |
+| `status_codes_to_retry` | `frozenset({408, 429, 500, 502, 503, 504})` | Statuses that qualify |
+| `http_methods_to_retry` | `frozenset({"GET", "HEAD", "PUT", "OPTIONS"})` | Methods that may be repeated at all |
 
-When the API marks an operation as paginated the generated controller returns a `PagedIterable`.
-Iterate over items directly, or iterate over pages:
+The wait before retry *n* (from 0) is `min(initial_delay × backoff_factor ** n + jitter, max_delay)`,
+or the server's `Retry-After` — seconds or an HTTP date — capped at `max_delay` when it sends one.
+
+A call is repeated only when **all** of these hold:
+
+- its method is in `http_methods_to_retry` — this gates dropped connections and timeouts as well as
+  statuses, so the default never repeats a `POST`, `PATCH` or `DELETE`;
+- it failed with a status in `status_codes_to_retry`, or with no response at all;
+- its body can be sent again — `bytes`, a `Path`, JSON, form and text bodies can; a binary body or a
+  multipart file read from an open stream cannot;
+- retries remain.
+
+A `401` is never in the default set; it invalidates the cached credential for the next call instead
+(`python-authentication`). Whatever you add to `status_codes_to_retry` is retried, so leave out
+statuses that cannot succeed a second time. When the last attempt fails, you see what a single attempt
+would give you: the `ApiError`, the raw response's `Failure`, or the HTTP library's own exception.
+
+A **custom transport** must raise `TransportError` (`from {root_package}.core import TransportError`)
+for a failed send to be retried; the shipped `Httpx2Client` does. Anything else it raises reaches you on
+the first attempt.
+
+### Per-call overrides
+
+`request_options` overrides two fields for one call; the rest stay the client's:
 
 ```python
-# Iterate items (SDK handles page fetching internally):
-for item in client.{resource}.{paged_operation}(offset=0, limit=10):
-    print(item.id)
-
-# Iterate pages (e.g. OffsetPagedResponse):
-for page in client.{resource}.{paged_operation}(offset=0, limit=10).pages():
-    print(page.offset)
-    for item in page.items():
-        print(item.id)
+client.{group}.{operation}(arg, request_options={"max_retries": 0})                     # this call: no retries
+client.{group}.{operation}(arg, request_options={"status_codes_to_retry": frozenset({429, 503})})  # this call: a narrower set
 ```
 
-Page types (`OffsetPagedResponse`, `CursorPagedResponse`, `LinkPagedResponse`,
-`NumberPagedResponse`) live in `paypal/pagination/` — inspect that directory for the exact type
-your operation returns and its cursor/offset/link attributes.
+**Do not wrap the call in a second retry layer** (`tenacity`, a loop of your own): attempts multiply,
+and each of your attempts is a new call with a new idempotency key (below). If you need behaviour the
+options cannot express, turn the SDK's off for that call and own it.
 
-For operations that are **not** paginated by the SDK (i.e., return a plain list), drive pagination
-manually by advancing the page or cursor parameter until the response signals the end:
+**Only a write that was sent may have landed.** A write that timed out *after it was sent* may have
+succeeded — a reset after the bytes reached the server is indistinguishable from one before. A write
+that was never sent did not happen; `python-error-handling` names the four exceptions that mean so.
+
+**The retry arithmetic is not a ceiling.** `(max_retries + 1) × timeout` plus the waits between them
+can be exceeded, because one attempt can outlast its timeout; see *Bounding a call*.
+
+### Making a write safe when you retry
+
+**Every operation other than a `GET` sends an `Idempotency-Key` header** — a UUID minted once per call,
+unless the description declares its own header of that name, in which case that one is a keyword you
+set. Within the SDK's retry loop every attempt carries the *same* key, which is what makes adding `POST`
+to `http_methods_to_retry` safe **where the provider deduplicates on it**. A retry you write yourself is
+a new call and mints a new key — the provider sees two submissions.
+
+Where the operation declares the parameter itself, derive the key from what the request is for, and
+reuse it on every attempt and every repeat:
 
 ```python
-page = 1
-while True:
-    items = client.{resource}.list_{items}(page=page, limit=100)
-    if not items:
-        break
-    for item in items:
-        process(item)
-    page += 1
+request_id = derive_ref(request)                     # the same on every attempt and every repeat — never uuid4()
+client.{group}.{operation}(body, {idempotency_key}=request_id)
 ```
 
-## Logging — HttpCallBack
+Two things the signature will not tell you, both of which need the provider's own documentation:
 
-There is no built-in logging hook separate from `HttpCallBack`. To log or inspect every request
-and response, subclass `HttpCallBack` (from `paypal/http/http_call_back.py`) and pass an instance
-as `http_call_back=`:
+- **Whether the provider actually enforces it.** The header being sent is not a guarantee that a
+  resend is deduplicated.
+- **The retention window.** Keys expire, and windows differ per API — so a resend after a long backoff
+  may no longer be collapsed.
+
+**Where the provider ignores the key, retrying a write is a real duplication risk.** Keep `POST` out
+of the gate; the safe recovery is to re-read state and decide, not to resend. Some such operations are
+naturally idempotent (cancelling an already-cancelled resource is usually harmless), but that is a
+per-operation judgement — make it deliberately rather than retrying the whole class.
+
+### ⚠⚠ The same operation arriving twice
+
+Everything above stops one call being *sent* twice. It does not stop one operation being *requested*
+twice — a double-submit, a caller retry, a redelivered message, two workers racing. The SDK's own
+`Idempotency-Key` does not help here: it is new on every call. Stopping it needs a claim that outlives
+the request and the process, taken atomically:
+
+```python
+ref = derive_ref(request)                  # from what the request is for — never uuid4()
+if not try_claim(ref):                     # insert-or-fail: the store rejects the second claim, you catch it
+    return load_existing(ref)              # may still be in progress — do not report it done
+result = client.{group}.{operation}(...)   # `ref` as its idempotency key, if the operation declares one
+complete(ref, result)
+```
+
+Build `try_claim` on whatever this codebase already uses to enforce uniqueness, and add no new store or
+dependency for it. If it has nothing that can hold such a claim, stop and raise that with the user.
+
+⚠⚠ An in-process lock (`threading.Lock`, `asyncio.Lock`, a module-level dict), a single-process or
+single-host assumption or an exists-then-create read is no guard here: it lets both callers through —
+and documenting it as a known limitation does not change that.
+
+## Bounding a call — what the timeout actually bounds
+
+One knob, in two places — and, for async code, a limit on the whole call:
+
+```python
+client = {Api}Client(timeout=10.0, {scheme}=...)                    # each wait, every request
+client.{group}.{operation}(arg, request_options={"timeout": 3.0})   # each wait, this one request
+await asyncio.wait_for(async_client.{group}.{operation}(arg), budget)   # the whole call (Async{Api}Client)
+```
+
+- The value is **seconds, as a float**; the per-call option overrides the client's.
+- It must be **> 0**. The constructor raises `ValueError` otherwise — and rejects NaN too, since the
+  guard is written `not timeout > 0`.
+- The default is **30 seconds** per wait.
+- Under the default transport, one float sets connect, read, write and pool timeouts alike. To separate
+  them (a short connect, a longer read), build your own transport with an
+  `httpx2.Timeout(connect=..., read=...)` and pass it as `custom_http_client`.
+
+**The timeout limits each wait, not the whole call.** Connecting, sending and receiving each have their
+own clock, and the receiving clock starts again every time a piece of the reply arrives. So a reply that
+keeps arriving slowly is never cut off, and each attempt — up to `max_retries + 1` of them — can take far
+longer than the number you set. This timeout firing is a transport failure and retries on the curve
+like any other; a `408` is the server's request timeout and sits in the default status set.
+
+**If you supply `custom_http_client`, the client's `timeout=` no longer reaches the wire.** That value
+only builds the SDK's *own* default transport. Set the timeout on the transport you pass, and honour
+`request.timeout` inside it (`python-client-initialization`).
+
+To limit a whole call, retries included, async code wraps it in `asyncio.wait_for(...)`
+(`asyncio.timeout(...)` needs 3.11, and this SDK supports 3.10); map its `asyncio.TimeoutError` as
+`python-error-handling` shows. Sync code has no whole-call limit through this SDK. A file or
+event-stream call returns at the head, so put the limit around the consuming code too.
+
+## Proxies and TLS
+
+The default transport takes these directly, and you pass it in yourself to set them:
+
+```python
+from {root_package}.core import Httpx2Client
+
+transport = Httpx2Client(timeout=10.0, proxy_url="http://proxy:3128", verify=True)
+client = {Api}Client(custom_http_client=transport, {scheme}=...)
+```
+
+- `verify` accepts a bool **or an `ssl.SSLContext`**. A private CA bundle or a client certificate is
+  configured by building a context (`ssl.create_default_context(cafile=...)`) — that is the supported
+  spelling for either.
+- **Standard environment variables are honoured by default**: `HTTP_PROXY` / `HTTPS_PROXY` /
+  `ALL_PROXY` / `NO_PROXY` (consulted only when `proxy_url` is unset), and `SSL_CERT_FILE` /
+  `SSL_CERT_DIR` for the trust store. This is request behaviour your deployment can change without
+  touching code — worth knowing when a container behaves differently from a laptop. A caller who needs
+  it off supplies their own transport.
+- **`verify=False` disables certificate verification.** It is not a debugging convenience for anything
+  carrying credentials; fix the trust store instead.
+
+## Logging — off by default, through the standard logger
+
+The SDK writes every HTTP exchange through Python's standard `logging` module under the
+`{root_package}` logger and configures nothing itself: no handler, no level, never the root. Turn it
+on as for any library, or from the environment for a run you cannot edit — `{ROOT_PACKAGE}_LOG` is the
+package name upper-cased with `_LOG` appended:
 
 ```python
 import logging
-from paypal.http.http_call_back import HttpCallBack
-from paypal.configuration import Configuration
-from paypal.paypal_client import PaypalServersdkClient
 
-logger = logging.getLogger(__name__)
-
-class LoggingCallBack(HttpCallBack):
-    def on_before_request(self, request):
-        logger.debug('--> %s %s', request.http_method, request.query_url)
-
-    def on_after_response(self, response):
-        logger.debug('<-- %d', response.status_code)
-
-config = Configuration(
-    http_call_back=LoggingCallBack(),
-    # other kwargs ...
-)
-client = PaypalServersdkClient(config=config)
+logging.basicConfig()                                      # your handler; the root stays at WARNING
+logging.getLogger("{root_package}").setLevel(logging.INFO)  # INFO: the lines; DEBUG: the dumps too
 ```
 
-`HttpCallBack` inherits from `apimatic_core`'s `CoreHttpCallback` and provides two hook methods:
-`on_before_request(request: HttpRequest)` and `on_after_response(response: HttpResponse)`. The
-generated `HttpResponseCatcher` in `tests/http_response_catcher.py` is the canonical example.
+```bash
+{ROOT_PACKAGE}_LOG=info  python app.py   # the request and response lines
+{ROOT_PACKAGE}_LOG=debug python app.py   # plus request headers, request body and response headers
+```
 
-`HttpRequest` attributes include `http_method`, `query_url`, `headers`, and `parameters`.
-`HttpResponse` attributes include `status_code`, `reason_phrase`, `headers`, and `text`.
+| Level | What is written |
+|---|---|
+| `INFO` | `HTTP GET https://api.example.com/items?page=2` as each attempt is sent, and `HTTP GET … -> 200 (12 ms)` when its head arrives |
+| `WARNING` | the response line for any status outside 2xx, and `HTTP GET … retrying in 1.0 s (attempt 1/3): 503 Service Unavailable` before each retry |
+| `ERROR` | `HTTP GET … failed after 6210 ms: ConnectError` when a call ends in an exception, with the exception attached |
+| `DEBUG` | the request headers, the request body and the response headers — each only when its flag below is on |
 
-### Verify on the wire (first run of any new integration)
+The dumps are opt-in through `logging_options`, a dict or a `LoggingOptions` from `{root_package}.core`:
 
-Run `LoggingCallBack` on the first execution of any new call and inspect the output:
+```python
+client = {Api}Client(
+    logging_options={"log_request_headers": True, "log_response_headers": True, "log_request_body": True},
+    {scheme}=...,
+)
+```
 
-1. The **verb** matches the operation's HTTP method.
-2. The **URL** has no literal `{placeholder}` left unsubstituted.
-3. Each **path segment** holds the value the API expects (e.g. correct enum wire value).
-4. The **query params** you set appear in the query string.
+| Option | Default | Effect |
+|---|---|---|
+| `log_request_headers` | `False` | the sent headers at DEBUG, masked |
+| `log_response_headers` | `False` | the received headers at DEBUG, masked |
+| `log_request_body` | `False` | the request body at DEBUG: its text when in memory, a description when streamed |
+| `body_size_limit` | `32768` | bytes of a logged body kept before it is cut |
+| `redaction_placeholder` | `"REDACTED"` | what a hidden value prints as |
+| `unmask_headers` / `mask_headers` | none | header names to show, or hide, against the built-in safe list |
+| `mask_keys` | 11 credential names | query and form keys whose values are always hidden; naming a set replaces the default |
 
-Remove or gate the callback behind a log-level check once verified.
+**What is never printed.** A header value is shown only when its name is on a built-in list of
+standard headers that carry no credential, so `Authorization`, `Cookie` and API-key headers print
+`REDACTED`. A query value is shown only for nine paging names (`cursor`, `limit`, `offset`, `page`,
+`since`, `size` and three more), and a URL's user and password are dropped. A form field under
+`mask_keys` is hidden. A JSON body is printed as sent, so turn `log_request_body` on only where its
+content may be logged. A response body is never logged.
+
+**One call, quieter.** `request_options={"log_level": logging.WARNING}` is a floor: records below it
+are not written for that call. It never turns on a record the client's options leave off.
+
+**`{ROOT_PACKAGE}_LOG` sets the level and, where no handler listens, adds a stderr one;** `debug`
+also turns the three flags on. An application that configured logging keeps its own handlers and
+format. The SDK never touches the `httpx2` or `httpcore2` loggers; if your root logger is at INFO,
+raise those two to WARNING yourself, or httpx2 prints its own unmasked line per attempt.
+
+**Tracing, metrics and anything the records do not carry** still go on the transport seam: wrap the
+SDK's own transport and delegate (`python-client-initialization` shows the shape). The wrapper sees
+the head only — do not read the body there — and the auth header is live, so never log it yourself.
+
+### Verify on the wire (first run of any new call)
+
+On success the SDK returns the decoded body and nothing else — never the URL or status. So a wrong path
+parameter, a header you thought you set, or a query parameter that silently did not serialize produces
+**no in-band signal**; the only symptom is a `404`/`422` that looks like a provider problem.
+
+Run the first call under `{ROOT_PACKAGE}_LOG=debug`, and check in the request line and header dump:
+
+1. the **method** matches the operation;
+2. the **path** has no unsubstituted `{placeholder}`;
+3. path segments carry **wire values** — an enum's string, not a Python member name;
+4. the **query parameter names** you set appear (a value outside the paging names prints `REDACTED`).
+
+Then drop the variable.
+
+## Connection pooling
+
+The client holds one pooled transport. Reuse the client and close it on shutdown; a client per call
+pays a fresh TCP and TLS handshake every time, and under managed auth a fresh token fetch as well.
+Under forking servers (Gunicorn, uWSGI, Celery prefork), construct it **after** the fork — a pool
+inherited across `fork()` is shared by processes that each believe they own it, which surfaces as
+intermittent, unexplainable connection errors. See `python-client-initialization`.
+
+## Next
+
+- Where the client should live → **python-client-initialization**
+- Which exceptions reach your boundary → **python-error-handling**
+- Faking the transport in tests → **python-testing**
