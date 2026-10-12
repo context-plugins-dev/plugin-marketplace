@@ -1,145 +1,389 @@
 ---
 name: typescript-client-initialization
-description: Construct and configure an APIMatic-generated TypeScript/Node SDK client — `new Client(config?: Partial<Configuration>)` takes a single options object (environment, credential objects, and a nested `httpClientOptions` for timeout/retries/proxy/agents), with static `Client.fromEnvironment(...)` / `Client.fromJsonConfig(...)` factories, a `client.withConfiguration(...)` clone, and controllers you instantiate yourself with `new {Resource}Api(client)`. Use the moment you call `new Client(...)`, build its `Configuration`, pick an `Environment`, or wire the client into your app — load it even after reading the constructor in the source, since the signature shows the arguments but not the options-object shape, the instantiate-the-controller-yourself rule, or the reuse-one-client lifetime guidance.
+description: Creating and reusing an APIMatic-generated TypeScript SDK client — construction, the ClientOptions shape, fetch ownership and client lifetime, and wiring the client into an application's startup. Load before wiring the client into an app or writing the factory that builds it.
 ---
 
-# Initializing an APIMatic-generated TypeScript SDK client
+# Initializing an APIMatic TypeScript SDK client
 
-This applies to **any** APIMatic-generated TypeScript SDK (APIMATIC v3.0). Replace placeholders with the
-real names from the SDK you are using:
+This applies to **any** APIMatic-generated TypeScript SDK. Replace placeholders with the real names
+from the SDK you are using:
 
-- `verizonlib` — the npm package name (the `"name"` in `package.json`, e.g. `multiauth-samplelib`).
-- `{Resource}Api` — a controller class exported from the package root.
+- `{Api}Client` — the single public client class (e.g. `FooClient`), declared in `src/client.ts`.
+- `{package-name}` — the npm package name from `package.json`. This can differ from the client class
+  name, and it is the **only** import specifier: deep imports (`{package-name}/models/…`) do not
+  resolve, because the `exports` map exposes `.` and `./package.json` and nothing else.
+- `{Environment}` — a member of the generated `ServerEnvironment` object (e.g. `Production`);
+  `{environment}` is that same environment's lower-camel key inside `serverOptions`.
+- `{group}` — a named server group key inside `serverOptions` (`default` is the usual one).
+- `{resource}` / `{operation}` — a resource getter on the client and an operation on it.
+- `{scheme}` — a credential member on the options object, one per auth scheme the API declares.
 
-## The shape: one options object, no builder
+Everything under `src/core/` is vendored static code that is **byte-identical in every generated
+TypeScript SDK**, so the engine behaviours below hold without checking yours. What varies per SDK is
+`src/client.ts`, `src/client-options.ts`, `src/servers.ts`, `src/auth-schemes.ts`, `src/resources/`
+and `src/models/`.
 
-The SDK exports a single `Client` class. You construct it with **one options object**, a
-`Partial<Configuration>` — every field is optional and missing fields fall back to `DEFAULT_CONFIGURATION`:
+## Where to read the client's shape
+
+1. **`sdk-map.md` § Getting a client** (at the package root) — the generated contract sheet. It prints
+   the construction sample, the complete `ClientOptions` table (`Field` · `Type` · `Default`, plus the
+   source file each field comes from), the per-request surface, and a **Not on this SDK** table naming
+   what is absent by design. § **Servers & auth** carries the environments, the server groups and
+   which operations require which scheme; § **Runtime & packaging** carries the dialects, the required
+   globals and the browser floors. Start here.
+2. **`README.md`** — Quick Start prints the same construction sample, in both the ESM and the
+   CommonJS spelling.
+3. `src/client.ts`, `src/client-options.ts` and `src/servers.ts` — the source, when you need to
+   confirm something the docs do not carry.
+
+Two facts about where those files live:
+
+- **The package ships its own `src/`, plus the generated map.** `package.json` `files` includes
+  `dist`, `src`, `README.md`, `api-reference.md`, `sdk-map.md` and `map`, so the readable TypeScript
+  source and the lookup index are both inside `node_modules/{package-name}/`. Read them there rather
+  than the compiled `dist/`.
+- **`dist/` must exist before the package can be referenced.** The SDK builds with `tshy`; a freshly
+  generated SDK consumed by path needs its `build` script run once. A `Cannot find module` on a
+  path-installed SDK is usually this, not a bad import.
+
+## Shape of the client
+
+APIMatic TypeScript SDKs expose **one public client class** with **one constructor**, taking a single
+options object:
 
 ```ts
-import { Client, Environment } from 'verizonlib';
+constructor(options: ClientOptions = {})
+```
 
-const client = new Client({
-  environment: Environment.Production,
-  // auth credential objects — see typescript-authentication
-  timeout: 30000,                  // ms; 0 = no timeout (the default)
-  httpClientOptions: {             // retries, proxy, agents — see typescript-configuration-resilience
-    // ...
+Nothing on it is required and neither is the argument, so `new {Api}Client()` compiles. The options
+object is the whole configuration surface, and reading the environment into it is yours to do at the
+call site.
+
+Operations are exposed on the client. Most are grouped under **resource getters** (one per API
+resource group) and called `client.{resource}.{operation}(...)` — for example, a `widgets` resource's
+`listWidgets` operation is `client.widgets.listWidgets(...)`. But when the spec declares **no tags**,
+or exactly **one tag covering every operation**, no resource classes are emitted at all and every
+operation sits **directly on the client**, called `client.{operation}(...)`. The available resource
+getters (and any direct operations) come from the contract sheet (grounded in `src/client.ts` and
+`src/resources/`) — not from the API's own documentation, and not from the compiled `dist/`. See
+**typescript-calling-endpoints**.
+
+The options type always carries these five knobs (credential members vary per API — see
+**typescript-authentication**):
+
+```ts
+export type ClientOptions = {
+  readonly serverEnvironment?: ServerEnvironment;  // selects the base URL
+  readonly serverOptions?: ServerOptions;          // per-server, per-environment baseUrl override
+  readonly retry?: RetryOptions | undefined;       // retry policy + per-attempt timeout (MILLISECONDS).
+                                                   //   Retries ON by default
+  readonly logging?: LoggingOptions | undefined;   // request/response logging — OFF by default
+  readonly fetch?: FetchLike | undefined;          // the ONE transport extension point —
+                                                   //   see typescript-configuration-resilience
+  // + one OPTIONAL credential member per auth scheme the API declares, and — for an OAuth2 scheme —
+  //   a {scheme}Strategy member alongside it (see typescript-authentication)
+};
+```
+
+Those five names are minted by the generator and cannot move; a credential spelled like one of them is
+the member that takes a suffix instead. **Every member is `readonly`**, and the client captures your
+options once, at construction — a different configuration means a new client. Each default is
+applied where the value is read: a server variable takes the `@default` on its member in
+`src/client-options.ts`, `fetch` takes its in `src/core/client-options.ts`, every `retry` field
+takes its in `src/core/retry.ts`, and every `logging` field its in `src/core/logging.ts`. Read them
+there rather than trusting the numbers on this page.
+Note in particular that the default `serverEnvironment` is the **first** environment the spec
+declares, which is not necessarily the production one.
+
+**Retries are on by default.** With `retry` left out, a `GET`, `HEAD`, `PUT` or `OPTIONS` call that
+gets a `408`, `429`, `500`, `502`, `503` or `504`, or loses its connection, or times out, is re-sent
+up to **3** more times with exponential backoff and jitter, honouring `Retry-After`. A `POST`,
+`PATCH` or `DELETE` is sent once unless you name its method in `httpMethodsToRetry`. Every one of
+those numbers is a `RetryOptions` field you can change, and `retry: { maxRetries: 0 }` turns retrying
+off. So **a failed idempotent call surfaces only after its retries are spent** — seconds later than the
+first failure, not at it. **typescript-configuration-resilience** owns the policy: the field table,
+what is and is not retried, and per-call overrides.
+
+**`fetch` is not a niche escape hatch — it is the only transport seam there is.** The SDK carries
+**no hooks, middleware or interceptors**, **no pagination** and **no streaming**. Each of those is
+something you build by wrapping `fetch` — including a header you want on every request.
+**typescript-configuration-resilience** carries the wrappers. **Logging is built in and off by
+default**: `logging` turns it on, and so does the `{APICLIENTTYPENAME}_LOG` environment variable (the
+client class name in upper snake case, plus `_LOG`) when code sets neither a `logger` nor a `level` — so a
+deployment can start writing request lines with no code change. `retry.onRetry` is the one built-in
+callback, and it sees only retries. A replacement `fetch` is called with one `Request` and no `init`,
+and **must forward that `Request`, or its `signal`,** to whatever performs the request; drop the signal
+and both cancellation and every attempt's timeout go inert.
+
+`retry.timeout` has its own trap: it is in **milliseconds**, it bounds **one attempt** — up to
+its response headers — not the whole call, and a value the platform cannot honour is **not** "no timeout" — it is
+resolved once when the client is built, and a negative, fractional, `NaN`, `Infinity` or out-of-range
+value silently falls back to the default (`60_000`) rather than failing. A usable value reaches the
+timer verbatim, so `timeout: 0` aborts every attempt instead of lifting the deadline. A single call
+may override `maxRetries`, `timeout` and `statusCodesToRetry`, and its log level, through
+`RequestOptions` = `{ signal, retry, logging }`; nothing else is per call.
+
+## Direct instantiation
+
+```ts
+import { {Api}Client, ServerEnvironment } from "{package-name}";
+
+const client = new {Api}Client({
+  serverEnvironment: ServerEnvironment.{Environment},   // pick the environment your API exposes
+  retry: { timeout: 10_000 },                            // per attempt; the retry defaults stand
+  // ...set the credential member your API uses (see typescript-authentication)
+});
+```
+
+Spell `serverEnvironment` out even when it is the default, so the host a call reaches is visible
+where the client is built rather than inherited silently.
+
+### What construction checks, and what it does not
+
+A clean construction does not mean a working client. **What throws from the constructor** is
+`ConfigurationError` — no reachable `fetch` implementation, a basic-auth username containing `:`, or a
+`serverEnvironment` the SDK does not know — and `SchemaError`, for a `serverOptions` override whose
+value its schema refuses: every server group is resolved as the client is built. Everything else is
+accepted and fails later, one layer from its cause:
+
+| Passed at construction | When it actually fails |
+| --- | --- |
+| a `retry` field out of range — a negative or fractional `timeout`, a `maxJitter` above `1`, a lower-cased `"get"` in `httpMethodsToRetry` | never — that field silently falls back to its default. `timeout: 0` is the exception: it is kept, and aborts every attempt. There is no `ValueError` equivalent here |
+| a `baseUrl` override | first call — as a connection error, or as a `401` against the wrong host |
+| wrong credentials | first call — and under OAuth2, first *token* request, so the error names the token endpoint rather than the operation you wrote |
+| a misspelled or extra credential field | never at run time. Credentials are plain objects checked only by TypeScript; nothing re-validates them at construction |
+| **an omitted** credential | first call, as a `401`. An unset credential configures the client for **no auth** — the operation sends no credential rather than erroring. See **typescript-authentication** |
+
+That last row is the one integrations lose time to, which is why the factory below checks credentials
+before constructing.
+
+### Client and fetch lifetime
+
+The SDK does **not** own a connection pool — `fetch` does. On Node the global `fetch` shares one
+process-wide dispatcher, so the reason to keep one client is not the socket pool; it is everything the
+constructor resolved and cached.
+
+**Keep the SDK client long-lived — it is not a stateless wrapper.** The only thing you hand it is
+configuration; its constructor resolves the rest and then owns it:
+
+- the **transport** — a `RawClient` built over the resolved `fetch` implementation. If no `fetch` is
+  reachable, **the constructor throws `ConfigurationError`**, not the first call;
+- the **server groups** — `buildServers(options)` runs here and resolves every group **once**: the
+  environment and each override are read and decoded as the client is built, and every call afterwards
+  only attaches its own sub-path. So assigning `serverEnvironment` or mutating an override on the
+  object you passed in does nothing, and a bad value throws from the constructor rather than from a
+  call. Configure the server before you construct, and construct a new client to change environment.
+  See **typescript-configuration-resilience**, *What is captured when*;
+- the **auth schemes** — validated at construction (a basic-auth username containing `:` throws
+  `ConfigurationError` from the constructor), and for an OAuth2 SDK the auth scheme *is* the access-token
+  cache, closed over by the scheme object.
+
+That last one is the reason a per-request client is a real cost rather than a stylistic one: a fresh
+client starts with an empty token cache, so **every construction pays a token request on its first
+call**. Three calls through three throwaway clients is three token round-trips where a shared client
+makes one — and the shared one also collapses concurrent callers onto a single in-flight token
+acquisition, which the throwaway ones cannot.
+
+Resource getters are memoized per client (`client.{resource}` builds once, behind `??=`, and is
+cached), so they are part of the same bargain. Never construct a resource class yourself: they are
+exported only for their merged namespaces and for `instanceof`, and their constructors take engine
+internals that are not exported.
+
+Construct per request only where you genuinely need different credentials per request — and then
+expect the token fetch. For rotating a secret without rebuilding, a credential member accepts a
+**function** instead of a string; see **typescript-authentication**.
+
+**There is nothing to close.** `src/core/` declares no `close()`, no `dispose()`, and no
+`Symbol.dispose` / `Symbol.asyncDispose`, so the client holds no releasable resource and needs no
+shutdown hook — the connection pool belongs to the runtime's `fetch`, not to you. The flip side is
+that there is no drain either: to stop in-flight requests at shutdown you abort them yourself through
+each call's `signal`.
+
+**The `fetch` implementation is resolved once, in the constructor** (`config.fetch ?? globalThis.fetch`,
+then stored). Two consequences that fail silently:
+
+- **Monkey-patching `globalThis.fetch` after a client exists has no effect on that client.** A test
+  that swaps the global and reuses a module-level client is still calling the original. Pass the fake
+  through `ClientOptions.fetch` and build the client after — see **typescript-testing**.
+- **A replacement must satisfy `typeof fetch`** — it is called as `fetch(request)`, one `Request` and
+  no `init`, with `this` set to `undefined`, so a transport method that depends on its receiver must be
+  bound before you pass it. It must forward that `Request`, or its `signal`, and resolve to a
+  `Response` the decoder can read `status`, `headers` and a body from.
+  **typescript-configuration-resilience** owns the wrappers.
+
+## Choosing the server / base URL
+
+**The shape does not vary with the spec.** However many servers or environments the API declares — one
+of each, or several of both — you always get a `ServerEnvironment` object and a `serverOptions` bag
+keyed by server group; a single-server, single-environment API simply gets a one-member enum and a
+one-group bag. There is no arm where the constructor takes a bare `baseUrl` instead.
+
+Environments are modeled as a `ServerEnvironment` const object plus a matching type alias, with one
+member per environment the API defines (e.g. `ServerEnvironment.Production`, or region members).
+Unlike model enums it is **closed** — no `| (string & {})` tail — so only declared members type-check.
+Select one on `serverEnvironment`.
+
+Overriding the base URL is nested **per server group AND per environment** —
+`serverOptions.{group}.{environment}.baseUrl`, NOT directly on `serverOptions`. Any **templated
+server variables** sit at that same level, beside `baseUrl`, one key per variable the URL template
+names:
+
+```ts
+const client = new {Api}Client({
+  serverEnvironment: ServerEnvironment.{Environment},
+  serverOptions: {
+    {group}: { {environment}: { baseUrl: "http://localhost:3000" } },
   },
 });
 ```
 
-There is **no** separate options class or builder — the `Configuration` interface *is* the constructor
-argument. Open `src/configuration.ts` for the exact field set; it varies per API but always includes
-`timeout`, `environment`, `httpClientOptions`, plus the credential objects for the schemes the API uses
-(and any server parameters such as `port`). `src/defaultConfiguration.ts` holds `DEFAULT_CONFIGURATION`
-(the field defaults) and `DEFAULT_RETRY_CONFIG`.
+An override is merged key-wise over that environment's defaults, so setting `baseUrl` alone leaves the
+template variables in place, and naming one group leaves the other groups alone. **That last part is a
+trap when an OAuth token endpoint lives on its own group**: redirecting the `default` group at a mock
+does not move the token request, which still reaches the real host. Override every group the run
+touches.
 
-## Choosing the environment / base URL
+The group keys, the environment members, and the URL each resolves to are all in
+`DEFAULT_SERVER_OPTIONS` in `src/servers.ts`, and tabulated under **Servers & auth** in the contract
+sheet — **read them there**, because a member's name does not reliably tell you its host.
+**typescript-configuration-resilience** owns server and base-URL configuration in full.
 
-Environments are members of an `enum Environment` in `src/configuration.ts`. **Read the enum for the
-real member names before naming one.**
+## Wiring into an application
 
-`Environment.Production` also does **not** imply a live host — it is simply the first server the spec
-lists, which for many APIs is the sandbox. Match the enum member to the base URL it resolves to in the
-`environments` map, not to what its name suggests.
+The client is a plain object you construct and share, so the wiring is whatever your framework
+already uses for singletons.
 
-The base URL is **derived** from the selected environment (plus any server parameters like `port`) by a
-private resolver in `src/client.ts` — there is no free-form `baseUrl` option. The default environment is
-whatever `DEFAULT_CONFIGURATION.environment` sets.
+The simplest form, and the right one for scripts and small services:
 
 ```ts
-const client = new Client({ environment: Environment.Production });
+// api-client.ts — one module-level instance, imported wherever it is needed
+import { {Api}Client, ServerEnvironment } from "{package-name}";
+
+export const client = new {Api}Client({
+  serverEnvironment: ServerEnvironment.{Environment},
+  {scheme}: process.env.API_TOKEN!,
+});
 ```
 
-Some SDKs expose server parameters (e.g. `port`, or a template variable) as their own `Configuration`
-fields that feed the base-URL template. To point the SDK at a mock or proxy that the `Environment`
-members don't cover, see **typescript-configuration-resilience** and **typescript-testing**. Inspect the
-`getBaseUri`/base-URL function in `src/client.ts` for the exact environments and server parameters.
+⚠ **A module-level client is constructed at import time, and that has a consequence worth planning
+for.** It reads `process.env` when the module is first imported — which, with ESM hoisting, can be
+*before* your config loader, `dotenv`, or secret fetch has run. The credential then resolves to
+`undefined`, and because **an unset credential is not an SDK error** (the operation simply sends no
+credential), you do not get a startup failure. You get a `401` from the API on the first call, at
+runtime, in whichever code path happens to run first — which reads like an expired token rather than
+a load-order bug. Two ways out: load config before anything imports this module, or build the client
+in a factory called from your startup path (below).
 
-## Custom HTTP options — timeout, proxy, agents, retries
+### Building it in a factory
 
-Transport tuning lives under the nested `httpClientOptions` (a `Partial<HttpClientOptions>`). The common
-fields (confirm in `doc/http-client-options.md`):
+The full shape. **The credential check is not optional to think about** — without it, a missing
+environment variable is invisible until an unrelated `401`:
 
-| Field | Type | Purpose |
+```ts
+import { {Api}Client, ServerEnvironment } from "{package-name}";
+
+export function build{Api}Client(): {Api}Client {
+  const token = process.env.API_TOKEN;
+
+  // SET THIS. An unset credential is NOT an SDK error — it sends no credential and 401s later.
+  if (!token) throw new Error("API_TOKEN is not set");
+
+  return new {Api}Client({
+    serverEnvironment: ServerEnvironment.{Environment},
+
+    // SET THIS. Default 60_000 ms. Bounds ONE attempt, and an idempotent call gets up to
+    // 4 of them. See typescript-configuration-resilience > Retries.
+    retry: { timeout: 10_000 },
+
+    {scheme}: token,
+  });
+}
+```
+
+Both flagged lines are load-bearing and they answer different failures: the credential check turns a
+silent `401` into a startup failure, and `retry.timeout` stops a hung provider from holding the caller
+open for the full default minute on every attempt — up to four of them on an idempotent call. Setting
+only the timeout is the common mistake — it looks like the configuration box is ticked.
+
+Then register the result once, however your framework shares singletons, and inject it:
+
+```ts
+// The registration call differs per framework; the rule — build once, share — does not.
+const client = build{Api}Client();
+
+export class MyService {
+  constructor(private readonly client: {Api}Client) {}
+
+  doWork() {
+    return this.client.{resource}.{operation}({ /* ... */ });
+  }
+}
+```
+
+Taking the client as a constructor parameter rather than importing the module singleton directly is
+what makes the service testable — a test passes a client built over a fake `fetch`. See
+**typescript-testing**.
+
+### Where the client lives
+
+| Host | Where to build it | Why |
 | --- | --- | --- |
-| `timeout` | `number` | per-request timeout in **milliseconds** (overrides the top-level `timeout`) |
-| `retryConfig` | `Partial<RetryConfiguration>` | retry policy — **off by default**; see typescript-configuration-resilience |
-| `proxySettings` | `ProxySettings` | route requests through a proxy |
-| `httpAgent` / `httpsAgent` | `any` | custom Node http(s) agents (keep-alive, TLS) |
+| Long-running server (Express, Nest, Fastify, …) | once at startup, shared for the process lifetime | one token cache, one set of memoized resource getters |
+| Serverless function | **module scope**, not inside the handler | module scope survives warm invocations, so the token cache does too. It does not survive a cold start, and nothing can make it |
+| `cluster` workers | once per worker, after the fork | workers are separate processes: **N workers is N token caches and N first-call token fetches**, and no client can be shared between them |
+| `worker_threads` | once per thread | a client is not structured-cloneable — it holds functions and private fields — so it cannot be posted across the boundary |
+| CLI / script | one at the top, or one per run | the process is short-lived; the cache never pays back |
+| Browser / edge runtime | wherever your bundle initialises | the package ships `dist/esm` and `dist/commonjs` only — no bundle, no UMD, no CDN artifact — so it goes through a bundler. Deno, Bun, Workers and Vercel Edge need only the globals the map lists, but none is a tested target |
+
+There is no fork-safety hazard to design around the way a pooled-socket SDK has: the client owns no
+pool. The cost of building one per worker is the token cache, not a corrupt connection.
+
+## ESM and CommonJS
+
+The package ships both dialects from a single entry, so `require` works with full types. In a
+TypeScript CommonJS file use the `import … = require(…)` form — a destructuring `require` runs fine
+but gives you `any`:
 
 ```ts
-const client = new Client({
-  httpClientOptions: {
-    timeout: 30000,
-    retryConfig: { maxNumberOfRetries: 3, backoffFactor: 2 },
-  },
-});
+import sdk = require("{package-name}");
+
+const client = new sdk.{Api}Client({ serverEnvironment: sdk.ServerEnvironment.{Environment} });
 ```
 
-There is also an escape hatch, `unstable_httpClientOptions` (`any`), passed straight to the underlying
-axios adapter — and it is the seam for injecting a fake client in tests (see **typescript-testing**).
+⚠ **A process that loads both dialects gets two independent copies of every class**, including every
+error class, and `instanceof` across that boundary is `false`. It is a real hazard in a mixed
+codebase, and it fails silently — a `catch` arm simply never matches. Pick one dialect per process
+where you can; where you cannot, narrow on `err.kind` or `err.payload.kind` instead of `instanceof`.
+See **typescript-error-handling**.
 
-## Configuration from environment variables / JSON
+Two consumer compiler settings change what you type at the construction site. Under
+`exactOptionalPropertyTypes`, **omit or spread** an absent option rather than assigning `undefined` to
+it. Under `verbatimModuleSyntax`, names that carry no runtime value — `ClientOptions` and every model
+type — must be imported with `import type`; `{Api}Client` and `ServerEnvironment` are real values and
+are imported normally.
 
-Two static factories build a client without writing the options object by hand:
+## Inbound webhooks — what the emitted package does and does not give you
 
-```ts
-const client = Client.fromEnvironment();            // reads process.env (or pass an object)
-const client = Client.fromJsonConfig(jsonString);   // parses + validates a JSON config string
-```
+**There is no webhook surface at all** — no webhook tree, no event parser, no signature verifier, on
+any generated TypeScript SDK. Nothing under `src/core/` computes any part of an inbound webhook for
+you, and no member of `ClientOptions` turns one on.
 
-`fromEnvironment` reads a fixed set of `UPPER_SNAKE` variables (e.g. `TIMEOUT`, `ENVIRONMENT`,
-`BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD`, `O_AUTH_CCG_O_AUTH_CLIENT_ID`, retry/proxy vars). The exact
-names are in `Configuration.fromEnvironment` in `src/configuration.ts` — grep it; both factories run the
-config through schema validation and **throw** on invalid input. (In Node, load a `.env` with `dotenv`
-first.)
+So verifying an inbound webhook is entirely yours to write, against the provider's published scheme:
+capture the raw body before any JSON parsing, compute the signature yourself, and compare in constant
+time. The SDK's model types stay useful for *deserializing* an event body once you have verified it —
+but do not read "the SDK parses this" as "the SDK verified this". See **typescript-models**.
 
-## Accessing controllers — you instantiate them
+Testing is a different matter and needs no shipped helpers — inject a fake `fetch`; see
+**typescript-testing**.
 
-Unlike some SDKs, the `Client` exposes **no controller accessor methods**. You construct each controller
-yourself, passing the client, then call operations on it (see **typescript-calling-endpoints**):
-
-```ts
-import { {Resource}Api } from 'verizonlib';
-
-const controller = new {Resource}Api(client);
-const response = await controller.{operation}(/* params */);
-```
-
-OAuth grant types are the exception: OAuth-using SDKs expose ready-made manager objects on the client
-(e.g. `client.oAuthCCGManager`, `client.oAuthACGManager`) used to fetch/refresh tokens — see
-**typescript-authentication**. Grep `src/client.ts` for any such public properties.
-
-## Client lifetime and reuse
-
-`Client` stores a `Readonly<Configuration>` and builds its request-builder factory **once** in the
-constructor — treat the client as **immutable and long-lived**. Construct it once at startup and reuse it
-for the process lifetime; do **not** build a new client per request (that discards connection pooling and
-any cached OAuth token). Controllers are cheap, stateless wrappers over the client — instantiate freely.
-
-```ts
-// startup — construct once:
-export const apiClient = new Client({ environment: Environment.Production /* + auth */ });
-
-// elsewhere — reuse, wrap in a controller per call site as needed:
-const controller = new {Resource}Api(apiClient);
-```
-
-To produce a variant with a few options changed (e.g. attach a fetched OAuth token), call
-`client.withConfiguration({ ... })` — it returns a **new** `Client` merged over the current config rather
-than mutating the original.
-
-## Dependency injection
-
-TypeScript/Node has no single DI standard. Export the constructed client as a module singleton (above), or
-provide it through your DI container of choice (NestJS provider, InversifyJS binding, a factory function)
-with a single provider that constructs the client once. Inject the `Client` (or a narrow interface of your
-own over the controllers you use) rather than constructing inside consumers.
+> **Not settled by the generator's current version.** The transport carries default header, query and
+> path-parameter channels that the generated client currently wires as empty arrays — a source comment
+> says nothing in the spec reaches them *yet*. If a later version starts populating them, a
+> client-wide header option could appear on `ClientOptions`, so read `src/client-options.ts` rather
+> than assuming the option list above is complete for your SDK.
 
 ## Next
 
 - Configure authentication → **typescript-authentication**
 - Make your first call → **typescript-calling-endpoints**
-- Tune retries/timeouts/proxy → **typescript-configuration-resilience**
+- Tune timeouts, retries, logging, base URL → **typescript-configuration-resilience**

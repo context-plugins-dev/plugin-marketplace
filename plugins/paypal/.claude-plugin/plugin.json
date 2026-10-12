@@ -1,7 +1,7 @@
 {
   "name": "paypal",
   "displayName": "paypal SDK",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Process online payments, accept credit cards, and manage digital transactions globally with PayPal.",
   "author": {
     "name": "APIMatic",
