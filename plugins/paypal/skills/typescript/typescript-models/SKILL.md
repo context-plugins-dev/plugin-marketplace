@@ -1,101 +1,351 @@
 ---
 name: typescript-models
-description: Construct and read the non-obvious model shapes of an APIMatic-generated TypeScript/Node.js SDK — oneOf/anyOf union types (built as plain object literals, narrowed on the way back with the generated is{Variant} type guards), string-literal enums (use the exported constants or raw string values), collections (Array<T>), ISO-8601 date strings, and unknown-field behavior. Use when building a request body or reading a response field that is a union, enum, list/map, or date — anything that isn't a plain string/number — or when an unmodeled JSON field is dropped on deserialization. Load it even after reading the field's type in the source, since the type name alone won't tell you that a union is validated at call time and rejects a value matching more than one variant.
+description: Working with models in an APIMatic-generated TypeScript SDK — building request bodies from plain object literals, required members and optional-versus-nullable fields, open enums, discriminated and undiscriminated unions, the four date codecs, and the schema companion beside every type. Load before constructing a request payload or mapping SDK models onto your own domain types.
 ---
 
 # Working with models in an APIMatic TypeScript SDK
 
-Most request/response data are plain TypeScript objects conforming to interfaces (covered in `typescript-calling-endpoints`). This skill covers the **non-obvious model shapes** that trip integrations up. The patterns are generic across APIMatic TypeScript SDKs; take the real type names from your SDK source.
+Every model is a plain `type` — **not a class**. There is no constructor, no builder and no default
+export: you build one with an object literal and read one with plain property access.
 
-> Throughout this skill, `{...}` is a placeholder for a name you take from your SDK (e.g. `{Union}`, `{Variant}`, `{EnumType}`, `{RequestType}`) — replace it with the concrete identifier from the source.
+```ts
+import { type {Model}, {model}Schema } from "{package-name}";
 
-## Discriminated union types
+const body: {Model} = { {requiredField}: "..." };
+```
 
-When a field can be one of several types, APIMatic generates a union type in
-`src/models/containers/`: a TypeScript union of the variant interfaces, plus a runtime schema built with
-`oneOf([...])`.
+**There is exactly one spelling.** No companion dict type, no builder, no factory and no static
+helper: an object literal is how every model is built, at every nesting level. And **nothing is
+frozen** — no property is emitted `readonly`, so a decoded response is an ordinary mutable object.
+Mutating one is allowed but is not a wire operation: what you changed reaches the API only by passing
+the value to an operation, or by re-encoding it yourself.
 
-### Construct — a plain object literal
+Two exports per model — the type and a `{model}Schema` value — and both come from the **package
+root**; deep imports do not resolve. This skill covers the **non-obvious model shapes** that trip
+integrations up. The patterns are generic across APIMatic TypeScript SDKs; take the real type and
+field names from the contract sheet — the **Models** section of `sdk-map.md` and the **Type sources**
+table on the operation's block in `map/operations/*.md`, both grounded in the `src/models/` the
+package ships — never from a compiled `dist/`, and never from a path derived off the type name. The
+`Source` column is where to **read** a shape, never what to import.
 
-There are **no factory helpers**. Assign the variant's own shape directly:
+> Throughout this skill, `{...}` is a placeholder for a name you take from your SDK (e.g. `{Model}`,
+> `{Union}`, `{Variant}`, `{Enum}`, `{package-name}`) — replace it with the concrete identifier from
+> the source.
 
-```typescript
-const body: {RequestType} = {
-  {field}: {                 // typed as {Union}
-    type: '{variantTag}',    // the variant's discriminating value, if it has one
-    someField: 'value',
-  },
+## Where a model lives
+
+| Group (as `sdk-map.md` names it) | Directory | What is emitted |
+| --- | --- | --- |
+| Objects, and `allOf` (flattened) | `src/models/` | one `type` with the properties, plus its schema |
+| Enums (open; const companion plus schema) | `src/models/` | `as const` object + open type alias + schema |
+| Discriminated unions (`oneOf`) | `src/models/unions/` | union of tag-narrowed arms + dispatching schema |
+| Unions without a discriminant (`anyOf`) | `src/models/unions/` | a bare union type + an accepting schema |
+
+Two consequences worth internalising. **`allOf` is flattened** into one plain object type — every
+constituent's properties restated on one type, with no inheritance, no base type to assign to and
+nothing recording the composition. And **an object schema that `allOf` subtypes made a polymorphic
+base is emitted as a discriminated union**, not as a base type, so it lands under `unions/` too:
+there is nothing to upcast to, and you narrow on the tag instead.
+
+## Required, optional, nullable
+
+```ts
+type {Model} = {
+  id: string;               // required
+  label?: string;           // optional — omit the key
+  retiredAt: Date | null;   // required AND nullable — null is a value, distinct from omitted
+  note?: string | null;     // both — omit it, or send null
 };
 ```
 
-### Read — narrow with the generated type guards
+Optional properties are declared `f?: T`, **not** `f?: T | undefined`. The SDK itself compiles under
+`exactOptionalPropertyTypes` and `verbatimModuleSyntax`, and where your project does too you must
+**omit or spread** an absent field rather than assign `undefined` to it:
 
-The union's namespace exports one `is{Variant}` guard per variant. These are **read-side only**:
-
-```typescript
-import { {Union} } from 'paypal-server-sdklib';
-
-if ({Union}.is{Variant}(response.result.{field})) {
-  // narrowed to {Variant}
-}
+```ts
+const bad: {Model}  = { id: "1", label: undefined };                          // does not compile
+const ok: {Model}   = { id: "1" };                                            // omit
+const also: {Model} = { id: "1", ...(label !== undefined ? { label } : {}) };  // conditional
 ```
 
-A tagged union can also be narrowed on its discriminator:
+At run time an explicit `undefined` is dropped from the JSON anyway (a property with a spec default
+sends its default instead, below), so that one is a type-level constraint. `null` is not: a nullable field set to `null` sends JSON `null`, which is a different
+request from an absent key — the distinction that matters on a PATCH.
 
-```typescript
-switch (response.result.{field}.type) {
-  case '{variantTag}':
-    break;
-}
+**A model property with a spec default is optional in the type and `s.defaulted(...)` in its schema.**
+Omitting it, or passing `undefined`, still sends the default (on a partial update, send its current value
+instead), and a response that omits it reads back as the default.
+
+### Reading one back
+
+An absent optional is simply `undefined` (one with a spec default reads back that default) — there
+is no sentinel value to import and nothing to
+compare against, so `?.` and `??` are the whole toolkit, and, on a property without a spec default, `!== undefined` is the precise test when
+"present but empty" and "absent" are different facts. Under `noUncheckedIndexedAccess` an array index
+is `T | undefined` too, so guard `items[0]` before reaching through it.
+
+⚠ **A response type whose spec marks nothing required decodes an empty body without complaint** —
+every property reads back `undefined`, or its default, and nothing throws. A truncated or partial body is therefore
+not an error, it is a model full of `undefined`; check the properties you actually depend on. A
+property that is required on a request type and optional on the response type is normal and
+intentional — two schemas for one concept — so never infer the response shape from the request shape.
+Both are in the map: the operation's **Fields** table for the request, the **Type sources** file for
+the response.
+
+## Polymorphic union types: discriminated and undiscriminated
+
+A `oneOf` with a discriminator becomes a union whose arms are the variant types **intersected with
+the tag literal that selects each one**, beside a schema that dispatches on that tag:
+
+```ts
+// src/models/unions/{union}.ts
+export type {Union} = ({VariantA} & { {tag}: "a" }) | ({VariantB} & { {tag}: "b" });
+
+export const {union}Schema = s.discriminatedUnion<{Union}>("{wire_tag}", {
+  a: {variantA}Schema,
+  b: {variantB}Schema,
+});
 ```
 
-### The failure mode to know about
+An `anyOf` becomes a bare union with nothing to switch on — `export type {Union} = string | {Model}`
+— and its schema tries the arms in **declaration order**, first match winning, so overlapping arms
+are resolved by order.
 
-`oneOf` is validated **when you make the call**, client-side, before any HTTP request. The runtime tries
-every variant and requires **exactly one** match. Two errors come out of it:
+⚠ **A payload matching no arm throws.** Both kinds fail the decode — through an operation as a
+`DecodeError` whose `cause` is the `SchemaError`, through a schema you call directly as the
+`SchemaError` itself — an unrecognized tag has no arm to dispatch to, and an undiscriminated union that matches nothing has no
+arm to fall back on. You do not get a null union or an unset variant. A provider that adds a variant
+your SDK predates turns into a decode failure on a call that was previously fine, so a union field is
+a place to expect regeneration pressure. See **typescript-error-handling** for where that surfaces in
+a catch ladder.
 
-- `Matched more than one type` — your value satisfies several variants at once. Usually the variants'
-  discriminating field is unconstrained in the generated schema, so no value can disambiguate them. Set
-  the discriminator explicitly; if it still fails, the union cannot be satisfied from the typed API and
-  the SDK needs regenerating.
-- `Could not match against any acceptable type` — a required field is missing, or the discriminator
-  value is not one the variant accepts.
+### Construct
 
-Open the container file under `src/models/containers/` and read the variant list and each variant's
-schema before debugging your own input.
+Write the arm's object literal directly; there is no factory, no static helper and no wrapper type.
+
+```ts
+const method: {Union} = { {tag}: "a", /* the rest of {VariantA} */ };
+```
+
+**Include the tag.** It is part of the union arm, and the schema puts it on the wire from the value
+you pass. The catch is that the tag lives on the *arm*, not on the variant type: a value typed
+`{VariantA}` does not carry it, so building one and then passing it where `{Union}` is expected fails
+to compile. Build against the union type, or spread the variant and add the tag.
+
+### Read / narrow
+
+```ts
+switch (value.{tag}) {                 // discriminated: the arms are exhaustive, no fallback needed
+  case "a": return handleA(value);     // narrowed to the {VariantA} arm
+  case "b": return handleB(value);
+}
+
+if (typeof other === "string") { /* ... */ } else { /* the model arm */ }   // undiscriminated
+```
+
+An undiscriminated union has nothing to switch on, so narrow it yourself with `typeof`, an `in`
+check, or `Array.isArray`.
+
+The tag property name on the **decoded** object is not necessarily the wire discriminator — a variant
+that renamed it has the rename applied on the way out, so the type alias spells what arrives while
+the schema names what was sent. Take the exact tag and arm names from the **Unions** table in
+`sdk-map.md` (`Union` · `Variants` · `Narrow with` · `Source`) rather than deriving them.
+
+A union the spec left unconstrained degrades to `unknown`. That is the generator reporting that the
+spec constrained nothing, not a bug.
 
 ## Collections
 
-List/array properties are `Array<T>` (or `T[]`); maps are `Record<string, V>`. Assign a plain array or object directly:
+Array properties are `T[]`; maps and free-form objects are `Record<string, T>` (an API-definition map
+is always string-keyed). Pass a plain array or a plain object — there is no wrapper and nothing to
+convert.
 
-```typescript
-const body: {RequestType} = {
-  {listProp}: ['A', 'B'],                           // Array<string>
-  {mapProp}: { key: 'value' },                      // Record<string, string>
-};
-```
-
-A `null` or `undefined` collection is omitted from the JSON; an **empty** array `[]` is serialized.
+| Value | On the wire |
+| --- | --- |
+| omitted / `undefined` | key absent, or the spec default if it has one |
+| `null` on a nullable field | `null` |
+| `[]` | `[]` |
+| `{}` | `{}` |
 
 ## Dates & numbers
 
-- Date/time fields are ISO-8601 strings (e.g. `"2024-06-17T15:30:45Z"`) — pass and receive them as strings. Use `new Date(value)` or a date library in your own code to parse/format; the SDK handles the wire format.
-- Money/quantities may be `string`, `number`, or a union; the model's property type is the source of truth.
-- Numeric IDs are typically `number`.
+- **A date-bearing field's wire format is fixed per field, and you cannot substitute another.** All
+  three instant kinds are typed `Date` while being three different things on the wire, so the type
+  alone does not tell you which — read the field's combinator in `src/models/{model}.ts`.
+
+  | Field's schema | Wire form | Model type |
+  | --- | --- | --- |
+  | `s.dateTime()` | offset-bearing ISO 8601 — `"2024-06-17T15:30:00Z"` | `Date` |
+  | `s.rfc1123DateTime()` | HTTP-date — `"Mon, 17 Jun 2024 15:30:00 GMT"` | `Date` |
+  | `s.unixSecondsDateTime()` | epoch **seconds** — `1718638200` | `Date` |
+  | `s.dateOnly()` | `"2024-06-17"` | `string` — **not** a `Date` |
+
+  Pass a `Date` and let the schema encode it; never hand-format one. Two traps: `s.dateTime()`
+  **requires the offset**, so a bare `"2024-06-17T15:30:00"` and a date-only `"2024-06-17"` both
+  fail; and a **`s.dateOnly()` field is a `string`**, so `new Date(...)` there is a type error and
+  formatting `"YYYY-MM-DD"` is yours to do.
+
+- **Every numeric kind is a `number`; the schema says which check runs.** `int32` and `int64` are
+  checked with `s.int()`, which rejects a fraction and anything outside the safe-integer range.
+  `float`, `double` and a big-decimal are checked with `s.float64()`, which rejects `NaN` and
+  `±Infinity`. Neither checks the `int32` or `float` range. An `int64` past
+  `Number.MAX_SAFE_INTEGER` is rejected rather than rounded, so treat a large-integer field as
+  something to verify against the provider rather than as a safe round-trip.
+
+- **There is no decimal type.** A `number` is an IEEE-754 double, so a spec that models money as a
+  number hands you binary floating point and the usual accumulation errors. Many APIs instead model
+  money as a **`string`** scaled to the currency (`"10.00"`) — where yours does, keep it a string end
+  to end: formatting it through `Number` and back is what silently turns `"10.10"` into `10.1`.
+
+- **A field the spec pinned to one value** is typed as that literal and checked with
+  `s.literal(...)`: `status: "accepted"` admits that one value and nothing else, in either direction.
+
+## Bytes
+
+A binary or file-typed field is `Uint8Array` in the model and a base64 `string` on the wire; the codec
+runs both ways, so pass bytes, not base64:
+
+```ts
+const body: {Model} = { payload: new TextEncoder().encode("hello") };
+const text = new TextDecoder().decode(model.payload);
+```
+
+That is for base64-in-JSON fields only, and it is **not** the file-upload carrier. The engine does
+send raw-binary and multipart bodies, but a file there is a `FileInput` — bytes the transport frames
+rather than a value a schema encodes — and the two deliberately never unify: a decoded `Uint8Array`
+field is not assignable to a file field, and `new Uint8Array(value)` is the one-copy bridge (see
+**typescript-calling-endpoints**).
+
+## What the schema checks — and what it does not
+
+Model schemas are built on `zod/v4-mini`, and what they verify is much narrower than what the API
+definition said. Checked: the **primitive type** of each property, the presence of required keys, the
+four date formats, base64, a pinned literal, and a union's arms. Not checked — because the generator
+does not transcribe these at all, so there is no attribute to read and no validator to invoke:
+
+- **String formats.** A uuid, email, uri, hostname, ip, password, json-pointer, regex-constrained
+  string and a bare `time` are all emitted as plain `string` with `s.string()`. Nothing validates the
+  shape in either direction: an email field accepts `"not an email"` and sends it.
+- **Bounds and lengths.** No `minLength`, `maxLength`, `minimum`, `maximum`, `multipleOf`,
+  `uniqueItems` or `pattern` reaches the generated code.
+- **`additionalProperties: false`.** Not enforced; see *Unknown / future fields* below.
+
+The provider is therefore the only enforcer of those, and it enforces them as a `400` you have to
+interpret. Where you want a client-side guard — worth it on user-supplied input before a write, where
+a rejected request costs a round-trip and an error path — write it at your own boundary and read the
+constraints from `api-reference.md`, which does carry the API's documented contract.
+
+What the schema *does* check, it checks in **both** directions: encoding runs before the request is
+built, so an invalid model rejects the call with an `EncodeError` — its `cause` the `SchemaError`
+naming the field — and **nothing is sent**. Read that failure as the SDK
+catching your mistake at the point you made it, not as an upstream fault — the compiler catches the
+shape and the schema catches the values, and between them very little reaches the network wrong. In
+production, catch it at the boundary where *you* assemble a payload from external input and treat it
+as a 4xx on your own API.
 
 ## Enums
 
-Enums are string literal unions with exported constants. Use the exported constants, or pass the raw string value for unknown/dynamic values:
+Enums are **not** TypeScript `enum`s. Each is an `as const` companion object plus an open type alias
+and a schema:
 
-```typescript
-import { {EnumType} } from 'paypal-server-sdklib';
-
-request.{enumProp} = {EnumType}.SomeConstant;
-request.{enumProp} = 'server_provided_value' as {EnumType};  // unknown-tolerant
+```ts
+export const {Enum} = { Active: "active", Retired: "retired" } as const;
+export type {Enum} = (typeof {Enum})[keyof typeof {Enum}] | (string & {});
+export const {enum}Schema = s.enumOf<{Enum}>({Enum});
 ```
 
-See [reference.md](reference.md) for the full enum declaration shape.
+- **The name is a value and a type at once.** Import it *without* `type` wherever you use its members
+  — `import { {Enum}, {enum}Schema } from "{package-name}"` — since a type-only import makes
+  `{Enum}.Active` a compile error. Prefer the member over the bare literal: a spec change that
+  renames the value then fails to compile instead of failing in production.
+- **The type is open.** The `(string & {})` tail — `(number & {})` on a number enum — means any value
+  of the base type is assignable.
+- **The schema validates the base type only, never membership.** A string enum accepts any string, a
+  number enum any number, so a value the provider added after generation round-trips instead of
+  throwing. That is deliberate, and it is why a `switch` over a **received** enum value needs a
+  `default` arm — the opposite of a discriminated union, whose unrecognized tag does throw.
+
+```ts
+if ({enum}Schema.values.includes(received)) { /* a member this SDK knows */ }
+```
+
+`.values` is the declared set in declaration order, and the only runtime membership test on offer.
+There is no coercion helper — no `fromValue`, no lookup function — because a member *is* its wire
+value: `{Enum}.Active === "active"`, `` `${{Enum}.Active}` `` is `"active"`, and a value read off a
+response compares directly against the member. Member *names*, on the other hand, are generated
+identifiers rather than wire values — a number enum's members are named `_0`, `_1`, … — so take the
+names and their values from the `as const` companion in the enum's own file.
+
+## JSON key renaming happens invisibly
+
+A model's property names are TypeScript-cased; the wire names may differ. The mapping is a `_keysMap`
+entry inside the schema literal, applied on decode and encode both, and carrying only the properties
+that actually moved:
+
+```ts
+export const {model}Schema = s.object<{Model}>({
+  createdAt: s.dateTime(),
+  _keysMap: { createdAt: "created_at" },
+});
+```
+
+So you always write `createdAt` and the wire always carries `created_at`. You never spell a wire name
+— except when you are staring at a captured HTTP body wondering why the key does not match. The
+divergences are listed once, in the **Wire-name divergences** table in `sdk-map.md` (`Type` ·
+`Property` · `Wire key`); every property absent from that table uses its TypeScript name verbatim.
 
 ## Unknown / future fields
 
-Models declare their properties explicitly. Unknown JSON fields received in a response are typically dropped on deserialization unless the model has an index signature (`[key: string]: unknown`). Check the model interface; to read an unmodeled field, regenerate the SDK or parse that response yourself.
+Model schemas are built on a **loose** object, so keys the model does not declare are **kept**, not
+stripped, in both directions — a field the provider added after this SDK was generated survives
+decoding and round-trips back out on encode. `additionalProperties: false` changes nothing about
+this.
+
+There is no typed bag to read them from, though, and no member on the type:
+
+```ts
+// Decoding: the key is on the object but not in the type.
+const extra = (model as Record<string, unknown>)["x_experimental"];
+
+// Encoding: extra keys on a value you pass are sent. Excess-property checking catches them on a
+// fresh object literal, but not on a value that arrived through a variable.
+```
+
+The keys are **wire names** — there is no property, so nothing maps the casing for you here. And a
+field you depend on that has no typed property is a regeneration signal: prefer regenerating the SDK
+from a spec that describes it over building program logic on stringly-typed lookups.
+
+The same symmetry is a debugging trap on the way out: a **misspelled** property is not an error
+either, it is an extra key that gets sent and ignored. So when a value you set is not taking effect,
+check the spelling against the type before suspecting the API — excess-property checking only catches
+it on a fresh object literal, never on a value that reached the call through a variable.
+
+## The schema companion
+
+You do not need `{model}Schema` for ordinary calls — the SDK encodes requests and decodes responses
+itself. It is there for when you hold the wire shape yourself:
+
+```ts
+const model = {model}Schema.decode(JSON.parse(rawWebhookBody));  // validates and renames keys
+const wire  = {model}Schema.encode(model);                       // exactly what the SDK would send
+const back  = {model}Schema.decode(JSON.parse(JSON.stringify(wire)));
+```
+
+Both directions throw `SchemaError` on mismatch and produce nothing partial. Using a schema on
+inbound data the SDK did not hand you — a webhook body, a queue message, a cached blob — is the
+intended use, and gives you exactly the validation the SDK applies to a response.
+
+Do **not** `JSON.stringify` a model directly for storage, or hand a raw model to anything that will
+encode it — a web framework's response serializer, a cache, a queue. `JSON.stringify` writes
+TypeScript-cased keys, ISO strings for every date whatever the field's wire format, and turns a
+`Uint8Array` into an index-keyed object (`{"0":104,"1":105}`) rather than base64. Decoding that back
+fails on the renamed keys and the wrong date formats, silently, and the bytes are simply gone. Either
+map the model into your own type at the boundary, or go through `encode` and hand out its result.
+
+See [reference.md](reference.md) for the per-shape reference: the full spec-kind-to-type table, the
+schema surface, and the failures each date codec produces.
+
+## Next
+
+- Pass models to an operation → **typescript-calling-endpoints**
+- `SchemaError`, and the `DecodeError` or `EncodeError` it arrives on → **typescript-error-handling**
